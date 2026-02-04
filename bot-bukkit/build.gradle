@@ -4,16 +4,9 @@ plugins {
 }
 
 repositories {
+    mavenLocal()
     maven {
         url 'https://libraries.minecraft.net/'
-    }
-    maven {
-        name "mineralDevPrivate"
-        url "https://repo.mineral.gg/private"
-        credentials {
-            username = project.findProperty("gpr.user") ?: System.getenv("USERNAME")
-            password = project.findProperty("gpr.token") ?: System.getenv("TOKEN")
-        }
     }
     maven { url = uri("https://repo.codemc.io/repository/maven-releases/") }
     maven { url = uri("https://repo.codemc.io/repository/maven-snapshots/") }
@@ -34,7 +27,7 @@ publishing {
 }
 
 dependencies {
-    compileOnly 'gg.mineral.mineralspigot:mineralspigot-server:20250717-19.37.32'
+    compileOnly 'gg.mineral.mineralspigot:mineralspigot-server:20260204-11.50.31'
     compileOnly 'com.viaversion:viaversion-api:5.3.1'
     compileOnly 'com.viaversion:viaversion-common:5.3.1'
     compileOnly 'com.viaversion:viaversion-bukkit:5.3.1'
@@ -43,6 +36,7 @@ dependencies {
     compileOnly project(':bot-api')
     compileOnly 'com.github.retrooper:packetevents-spigot:2.7.0'
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
+    compileOnly "io.netty:netty-all:4.0.23.Final"
 }
 
 shadowJar {
