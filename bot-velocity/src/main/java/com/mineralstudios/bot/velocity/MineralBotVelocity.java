@@ -6,6 +6,7 @@ import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
+import com.velocitypowered.api.proxy.messages.LegacyChannelIdentifier;
 import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.event.PacketListenerAbstract;
 import com.github.retrooper.packetevents.event.PacketListenerPriority;
@@ -40,10 +41,15 @@ public class MineralBotVelocity {
         PacketEvents.setAPI(VelocityPacketEventsBuilder.build(server, pluginContainer, logger, dataDirectory));
         PacketEvents.getAPI().getSettings().checkForUpdates(false);
         PacketEvents.getAPI().load();
+        PacketEvents.getAPI().load();
         PacketEvents.getAPI().init();
+
+        // Initialize Mineral Bot API
+        gg.mineral.bot.base.client.BotImpl.Companion.init();
 
         // Register Plugin Message Channel
         server.getChannelRegistrar().register(PLUGIN_CHANNEL);
+        server.getChannelRegistrar().register(new LegacyChannelIdentifier("MineralBot"));
 
         // Register Event Listener
         server.getEventManager().register(this, new VelocityBotManager(this, server, logger));

@@ -17,17 +17,19 @@ allprojects {
         options.encoding = 'UTF-8'
     }
 
-    // Default to Java 17, but allow bot-mineral to override
-    if (project.name != 'bot-mineral') {
+    // 定义需要使用高版本 JDK 的模块列表
+    def highJvmProjects = ['bot-mineral', 'bot-velocity']
+
+    if (highJvmProjects.contains(project.name)) {
         compileJava {
-            sourceCompatibility = '17'
-            targetCompatibility = '17'
+            sourceCompatibility = '21'
+            targetCompatibility = '21'
             options.compilerArgs += ['-parameters']
         }
     } else {
         compileJava {
-            sourceCompatibility = '21'
-            targetCompatibility = '21'
+            sourceCompatibility = '17'
+            targetCompatibility = '17'
             options.compilerArgs += ['-parameters']
         }
     }
