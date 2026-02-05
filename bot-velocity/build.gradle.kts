@@ -27,6 +27,7 @@ dependencies {
     implementation(project(":bot-api"))
     implementation(project(":bot-shared-library"))
     implementation(project(":bot-base-client"))
+    implementation(project(":bot-intelligence"))
     
     // Kotlin
     implementation(kotlin("stdlib-jdk8"))
