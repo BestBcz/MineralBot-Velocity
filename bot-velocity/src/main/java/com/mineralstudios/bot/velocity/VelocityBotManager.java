@@ -16,6 +16,7 @@ import java.io.File;
 
 import gg.mineral.bot.base.client.instance.ClientInstance;
 import gg.mineral.bot.api.configuration.BotConfiguration;
+import gg.mineral.bot.ai.goal.practice.PracticeAI;
 import com.google.common.collect.ArrayListMultimap;
 import java.net.Proxy;
 
@@ -34,6 +35,9 @@ public class VelocityBotManager {
 
     // Track bot targets: Bot UUID -> Target Player UUID
     private final Map<UUID, UUID> botTargets = new ConcurrentHashMap<>();
+
+    // Track kit types: Bot UUID -> Kit Type
+    private final Map<UUID, String> kitTypes = new ConcurrentHashMap<>();
 
     public VelocityBotManager(Object plugin, ProxyServer server, Logger logger) {
         this.plugin = plugin;
@@ -108,12 +112,14 @@ public class VelocityBotManager {
 
             // Store target for combat AI
             botTargets.put(botUUID, playerUUID);
+            kitTypes.put(botUUID, kitType);
 
-            // Enable combat AI for this bot
+            // Enable combat AI for this bot using PracticeAI
             ClientInstance bot = activeBots.get(botUUID);
             if (bot != null) {
-                logger.info("Enabling combat AI for bot {}", botUUID);
-                // Combat AI will be handled in the game loop
+                logger.info("Configuring combat AI for bot {} with kit type: {}", botUUID, kitType);
+                // Configure the bot with appropriate goals for this kit type
+                PracticeAI.INSTANCE.configureBotForKit(bot, kitType);
             }
         } catch (Exception e) {
             logger.error("Failed to parse BotDuelStarted message", e);
@@ -129,6 +135,7 @@ public class VelocityBotManager {
 
             ClientInstance bot = activeBots.remove(botUUID);
             botTargets.remove(botUUID);
+            kitTypes.remove(botUUID);
 
             if (bot != null) {
                 try {
