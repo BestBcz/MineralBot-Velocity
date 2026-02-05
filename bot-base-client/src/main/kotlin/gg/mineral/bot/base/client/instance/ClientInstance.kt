@@ -417,9 +417,23 @@ open class ClientInstance(
     ) {
         val player = this.thePlayer
         if (player != null) {
-            player.setPositionAndRotation(bX, bY, bZ, bYaw, bPitch)
+            // Only force teleport if deviation is large (> 2 blocks)
+            // Otherwise, trust local physics for smooth movement
+            val distSq =
+                    (player.posX - bX) * (player.posX - bX) +
+                            (player.posY - bY) * (player.posY - bY) +
+                            (player.posZ - bZ) * (player.posZ - bZ)
+
+            if (distSq > 4.0) {
+                player.setPositionAndRotation(bX, bY, bZ, bYaw, bPitch)
+            } else {
+                // Still sync rotation as that's less jittery and crucial for aiming validation if
+                // server overrides
+                // Actually, let's trust local rotation too for aiming, but sync health/food always
+            }
+
             player.setHealth(bHealth)
-            // player.foodStats.foodLevel = bFood // Accessor might vary
+            // player.foodStats.foodLevel = bFood
             // player.foodStats.saturationLevel = bSat
         }
 
@@ -427,14 +441,11 @@ open class ClientInstance(
         if (world != null) {
             var targetEntity: net.minecraft.client.entity.EntityOtherPlayerMP? = null
 
-            // Find existing target
-            for (obj in world.getLoadedEntityList()) {
-                if (obj is net.minecraft.client.entity.EntityOtherPlayerMP &&
-                                obj.uniqueID == targetUuid
-                ) {
-                    targetEntity = obj
-                    break
-                }
+            // Optimize: Lookup by ID directly since we use consistent IDs
+            val eid = targetUuid.hashCode()
+            val existing = world.getEntityByID(eid)
+            if (existing is net.minecraft.client.entity.EntityOtherPlayerMP) {
+                targetEntity = existing
             }
 
             // Create if not exists
@@ -449,7 +460,7 @@ open class ClientInstance(
                 world.addEntityToWorld(eid, targetEntity)
             }
 
-            // Update target state
+            // Update target state - Target MUST be exact as we don't simulate it
             targetEntity.setPositionAndRotation(tX, tY, tZ, tYaw, tPitch)
             targetEntity.setHealth(tHealth)
             targetEntity.motionX = tVelX

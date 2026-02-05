@@ -36,11 +36,14 @@ public class VelocityBotManager {
 
     private void handleBotGuide(ByteArrayDataInput in) {
         try {
-            String botUuidStr = in.readUTF();
-            String targetUuidStr = in.readUTF();
+            // Read UUIDs as longs (Most Significant Bits, Least Significant Bits)
+            long botUuidMost = in.readLong();
+            long botUuidLeast = in.readLong();
+            long targetUuidMost = in.readLong();
+            long targetUuidLeast = in.readLong();
 
-            UUID botUuid = UUID.fromString(botUuidStr);
-            UUID targetUuid = UUID.fromString(targetUuidStr);
+            UUID botUuid = new UUID(botUuidMost, botUuidLeast);
+            UUID targetUuid = new UUID(targetUuidMost, targetUuidLeast);
 
             // Bot Data
             double bX = in.readDouble();
@@ -91,6 +94,9 @@ public class VelocityBotManager {
     // different UUID)
     private final Map<String, UUID> botsByUsername = new ConcurrentHashMap<>();
 
+    // Track bot tasks: Bot UUID -> ScheduledTask
+    private final Map<UUID, com.velocitypowered.api.scheduler.ScheduledTask> botTasks = new ConcurrentHashMap<>();
+
     // Track server-assigned UUID to our UUID: Server UUID -> Our Bot UUID
     private final Map<UUID, UUID> serverUuidToOurUuid = new ConcurrentHashMap<>();
 
@@ -137,8 +143,9 @@ public class VelocityBotManager {
     @Subscribe
     public void onPluginMessage(PluginMessageEvent event) {
         ChannelIdentifier identifier = event.getIdentifier();
-        logger.info("DEBUG: PluginMessageEvent received. ID: '{}' (Class: {})", identifier.getId(),
-                identifier.getClass().getName());
+        // logger.info("DEBUG: PluginMessageEvent received. ID: '{}' (Class: {})",
+        // identifier.getId(),
+        // identifier.getClass().getName());
 
         // Check for MineralBot channel
         boolean isMineralBot = identifier.getId().equals("MineralBot") || identifier.getId().equals("mineralbot:main");
@@ -151,7 +158,8 @@ public class VelocityBotManager {
         String subChannel;
         try {
             subChannel = in.readUTF();
-            logger.info("Plugin Message received on channel: {} with subchannel: {}", identifier.getId(), subChannel);
+            // logger.info("Plugin Message received on channel: {} with subchannel: {}",
+            // identifier.getId(), subChannel);
         } catch (Exception e) {
             logger.error("Failed to read subchannel from plugin message on " + identifier.getId(), e);
             return;
@@ -262,6 +270,13 @@ public class VelocityBotManager {
             kitTypes.remove(ourBotUUID);
             serverUuidToOurUuid.remove(serverBotUUID);
 
+            // Stop the scheduled task
+            com.velocitypowered.api.scheduler.ScheduledTask task = botTasks.remove(ourBotUUID);
+            if (task != null) {
+                task.cancel();
+                logger.info("Bot task cancelled for {}", ourBotUUID);
+            }
+
             // Also remove from username map
             String username = null;
             for (Map.Entry<String, UUID> entry : botsByUsername.entrySet()) {
@@ -276,8 +291,24 @@ public class VelocityBotManager {
 
             if (bot != null) {
                 try {
+                    // Cache the run dir before shutdown might clear it (though it won't clear the
+                    // File object)
+                    File runDir = bot.mcDataDir;
+
                     bot.shutdown();
                     logger.info("Bot {} disconnected successfully", ourBotUUID);
+
+                    // Cleanup Run Directory
+                    if (runDir != null && runDir.exists()) {
+                        try {
+                            // Using FileUtils from Commons IO (shaded/relocated or available)
+                            // or just recursive delete
+                            org.apache.commons.io.FileUtils.deleteDirectory(runDir);
+                            logger.info("Deleted bot run directory: {}", runDir.getAbsolutePath());
+                        } catch (Exception e) {
+                            logger.warn("Failed to delete bot run directory: {}", runDir.getAbsolutePath(), e);
+                        }
+                    }
                 } catch (Exception e) {
                     logger.error("Error shutting down bot {}", ourBotUUID, e);
                 }
@@ -308,7 +339,7 @@ public class VelocityBotManager {
                 String botUsername = "Bot_" + kitType;
                 config.setUuid(botUUID);
                 config.setUsername(botUsername);
-                config.setDebug(true);
+                config.setDebug(false);
 
                 // Create ClientInstance
                 File runDir = new File("bot-run/" + config.getUuid());
@@ -353,21 +384,31 @@ public class VelocityBotManager {
                 }).delay(3, TimeUnit.SECONDS).schedule(); // 3 second delay to ensure connection
 
                 // Schedule Game Loop
-                server.getScheduler().buildTask(plugin, () -> {
-                    if (bot.isRunning()) {
-                        try {
-                            bot.runGameLoop();
-                        } catch (Exception e) {
-                            logger.error("Error in bot game loop", e);
-                        }
-                    } else {
-                        // Bot stopped running, clean up
-                        activeBots.remove(botUUID);
-                        botTargets.remove(botUUID);
-                        kitTypes.remove(botUUID);
-                        botsByUsername.remove(botUsername);
-                    }
-                }).repeat(50, TimeUnit.MILLISECONDS).schedule();
+                com.velocitypowered.api.scheduler.ScheduledTask loopTask = server.getScheduler()
+                        .buildTask(plugin, () -> {
+                            if (bot.isRunning()) {
+                                try {
+                                    bot.runGameLoop();
+                                } catch (Exception e) {
+                                    logger.error("Error in bot game loop", e);
+                                }
+                            } else {
+                                // Bot stopped running, clean up if not already done
+                                activeBots.remove(botUUID);
+                                botTargets.remove(botUUID);
+                                kitTypes.remove(botUUID);
+                                botsByUsername.remove(botUsername);
+
+                                // Self-cancel
+                                com.velocitypowered.api.scheduler.ScheduledTask t = botTasks.remove(botUUID);
+                                if (t != null) {
+                                    t.cancel();
+                                    logger.info("Bot task self-cancelled for {}", botUUID);
+                                }
+                            }
+                        }).repeat(50, TimeUnit.MILLISECONDS).schedule();
+
+                botTasks.put(botUUID, loopTask);
 
             } catch (Exception e) {
                 logger.error("Failed to start bot", e);
