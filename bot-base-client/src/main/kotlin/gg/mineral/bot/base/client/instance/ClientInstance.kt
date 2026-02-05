@@ -23,45 +23,47 @@ import gg.mineral.bot.api.world.block.Block
 import gg.mineral.bot.base.client.manager.InstanceManager
 import gg.mineral.bot.impl.thread.ThreadManager
 import it.unimi.dsi.fastutil.objects.ObjectLinkedOpenHashSet
-import net.minecraft.client.Minecraft
-import net.minecraft.client.gui.GuiScreen
-import net.minecraft.client.multiplayer.WorldClient
-import net.minecraft.util.Session
-import org.apache.logging.log4j.LogManager
 import java.io.File
 import java.net.Proxy
 import java.util.*
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.ScheduledExecutorService
+import net.minecraft.client.Minecraft
+import net.minecraft.client.gui.GuiScreen
+import net.minecraft.client.multiplayer.WorldClient
+import net.minecraft.util.Session
+import org.apache.logging.log4j.LogManager
 
 open class ClientInstance(
-    override val configuration: BotConfiguration,
-    width: Int,
-    height: Int,
-    fullscreen: Boolean,
-    demo: Boolean,
-    gameDir: File,
-    assetsDir: File,
-    resourcePackDir: File,
-    proxy: Proxy,
-    version: String,
-    userProperties: Multimap<*, *>,
-    assetIndex: String
-) : Minecraft(
-    Session(configuration.fullUsername, configuration.uuid.toString(), "0", "legacy"),
-    width,
-    height,
-    fullscreen,
-    demo,
-    gameDir,
-    assetsDir,
-    resourcePackDir,
-    proxy,
-    version,
-    userProperties,
-    assetIndex
-), ClientInstance {
+        override val configuration: BotConfiguration,
+        width: Int,
+        height: Int,
+        fullscreen: Boolean,
+        demo: Boolean,
+        gameDir: File,
+        assetsDir: File,
+        resourcePackDir: File,
+        proxy: Proxy,
+        version: String,
+        userProperties: Multimap<*, *>,
+        assetIndex: String
+) :
+        Minecraft(
+                Session(configuration.fullUsername, configuration.uuid.toString(), "0", "legacy"),
+                width,
+                height,
+                fullscreen,
+                demo,
+                gameDir,
+                assetsDir,
+                resourcePackDir,
+                proxy,
+                version,
+                userProperties,
+                assetIndex
+        ),
+        ClientInstance {
 
     // Active goals.
     private val goals = ObjectLinkedOpenHashSet<Goal>()
@@ -82,16 +84,14 @@ open class ClientInstance(
         mainThread = null
     }
 
-    /**
-     * Internal data class to track delayed tasks.
-     */
+    /** Internal data class to track delayed tasks. */
     internal data class DelayedTask(val runnable: Runnable, val sendTime: Long) {
         fun canSend(currentTime: Long): Boolean = currentTime >= sendTime
     }
 
     /**
-     * Schedules a task to run after a delay. If called on the main thread with zero delay and no queued tasks,
-     * the task executes immediately.
+     * Schedules a task to run after a delay. If called on the main thread with zero delay and no
+     * queued tasks, the task executes immediately.
      */
     fun scheduleTask(runnable: Runnable, delay: Long): Boolean {
         val currentTime = getSystemTime()
@@ -103,9 +103,7 @@ open class ClientInstance(
         return false
     }
 
-    /**
-     * Returns true if the current thread is the main game thread.
-     */
+    /** Returns true if the current thread is the main game thread. */
     override fun isMainThread(): Boolean = Thread.currentThread().name.contains("GameLoop")
 
     override val gameLoopExecutor: ScheduledExecutorService
@@ -182,10 +180,13 @@ open class ClientInstance(
 
         // Update latency using a Gaussian distribution from the fake player's random.
         val fp = fakePlayer
-        latency = fp.random.nextGaussian(
-            configuration.latency.toDouble(),
-            configuration.latencyDeviation.toDouble()
-        ).toInt()
+        latency =
+                fp.random
+                        .nextGaussian(
+                                configuration.latency.toDouble(),
+                                configuration.latencyDeviation.toDouble()
+                        )
+                        .toInt()
 
         var executing = false
         for (goal in goals) {
@@ -218,9 +219,9 @@ open class ClientInstance(
 
     override fun shutdownMinecraftApplet() {
         if (InstanceManager.instances.remove(configuration.uuid) != null)
-            logger.debug("Removed instance: {}", configuration.uuid)
+                logger.debug("Removed instance: {}", configuration.uuid)
         if (InstanceManager.pendingInstances.remove(configuration.uuid) != null)
-            logger.debug("Removed pending instance: {}", configuration.uuid)
+                logger.debug("Removed pending instance: {}", configuration.uuid)
         goals.clear()
         running = false
         logger.debug("Stopping!")
@@ -254,36 +255,37 @@ open class ClientInstance(
                 override val lastReportedX: Double = 0.0
                 override val lastReportedY: Double = 0.0
                 override val lastReportedZ: Double = 0.0
-                override val inventory: Inventory = object : Inventory {
-                    override val heldItemStack: ItemStack? = null
-                    override val heldSlot: Int = 0
+                override val inventory: Inventory =
+                        object : Inventory {
+                            override val heldItemStack: ItemStack? = null
+                            override val heldSlot: Int = 0
 
-                    override fun getItemStackAt(slot: Int): ItemStack? {
-                        return null
-                    }
+                            override fun getItemStackAt(slot: Int): ItemStack? {
+                                return null
+                            }
 
-                    override val helmet = null
-                    override val chestplate = null
-                    override val leggings = null
-                    override val boots = null
+                            override val helmet = null
+                            override val chestplate = null
+                            override val leggings = null
+                            override val boots = null
 
-                    override fun findSlot(item: Item): Int {
-                        return -1
-                    }
+                            override fun findSlot(item: Item): Int {
+                                return -1
+                            }
 
-                    override fun findSlot(id: Int): Int {
-                        return -1
-                    }
+                            override fun findSlot(id: Int): Int {
+                                return -1
+                            }
 
-                    override val items: Array<ItemStack?>
-                        get() = emptyArray()
-
-                }
-                override val inventoryContainer = object : InventoryContainer {
-                    override fun getSlot(inventory: Inventory, slot: Int): Slot? {
-                        return null
-                    }
-                }
+                            override val items: Array<ItemStack?>
+                                get() = emptyArray()
+                        }
+                override val inventoryContainer =
+                        object : InventoryContainer {
+                            override fun getSlot(inventory: Inventory, slot: Int): Slot? {
+                                return null
+                            }
+                        }
 
                 override val eyeHeight: Float = 0f
                 override val username = configuration.fullUsername
@@ -293,7 +295,8 @@ open class ClientInstance(
                 override fun isPotionActive(potionId: Int): Boolean = false
                 override val health = 0f
                 override val uuid = configuration.uuid
-                override val collidingBoundingBox: BoundingBox? get() = null
+                override val collidingBoundingBox: BoundingBox?
+                    get() = null
                 override val entityId = 0
                 override val x = 0.0
                 override val y = 0.0
@@ -308,61 +311,63 @@ open class ClientInstance(
                 override var motionY = 0.0
                 override var motionZ = 0.0
                 override val world: ClientWorld
-                    get() = object : ClientWorld {
-                        override val entities: Collection<ClientEntity> = emptyList()
+                    get() =
+                            object : ClientWorld {
+                                override val entities: Collection<ClientEntity> = emptyList()
 
-                        override fun getEntityByID(entityId: Int): ClientEntity? {
-                            return null
-                        }
-
-                        override fun getBlockAt(x: Int, y: Int, z: Int): Block {
-                            return object : Block {
-                                override val id: Int = 0
-
-                                override fun getCollisionBoundingBox(
-                                    world: ClientWorld,
-                                    xTile: Int,
-                                    yTile: Int,
-                                    zTile: Int
-                                ): BoundingBox? {
+                                override fun getEntityByID(entityId: Int): ClientEntity? {
                                     return null
                                 }
-                            }
-                        }
 
-                        override fun getBlockAt(x: Double, y: Double, z: Double): Block {
-                            return object : Block {
-                                override val id: Int = 0
+                                override fun getBlockAt(x: Int, y: Int, z: Int): Block {
+                                    return object : Block {
+                                        override val id: Int = 0
 
-                                override fun getCollisionBoundingBox(
-                                    world: ClientWorld,
-                                    xTile: Int,
-                                    yTile: Int,
-                                    zTile: Int
-                                ): BoundingBox? {
-                                    return null
+                                        override fun getCollisionBoundingBox(
+                                                world: ClientWorld,
+                                                xTile: Int,
+                                                yTile: Int,
+                                                zTile: Int
+                                        ): BoundingBox? {
+                                            return null
+                                        }
+                                    }
+                                }
+
+                                override fun getBlockAt(x: Double, y: Double, z: Double): Block {
+                                    return object : Block {
+                                        override val id: Int = 0
+
+                                        override fun getCollisionBoundingBox(
+                                                world: ClientWorld,
+                                                xTile: Int,
+                                                yTile: Int,
+                                                zTile: Int
+                                        ): BoundingBox? {
+                                            return null
+                                        }
+                                    }
                                 }
                             }
+                override val random: Random
+                    get() = Random()
+                override var boundingBox: BoundingBox =
+                        object : BoundingBox {
+                            override var minX: Double = 0.0
+                            override var minY: Double = 0.0
+                            override var minZ: Double = 0.0
+                            override var maxX: Double = 0.0
+                            override var maxY: Double = 0.0
+                            override var maxZ: Double = 0.0
                         }
-
-                    }
-                override val random: Random get() = Random()
-                override var boundingBox: BoundingBox = object : BoundingBox {
-                    override var minX: Double = 0.0
-                    override var minY: Double = 0.0
-                    override var minZ: Double = 0.0
-                    override var maxX: Double = 0.0
-                    override var maxY: Double = 0.0
-                    override var maxZ: Double = 0.0
-                }
 
                 override val isSprinting = false
                 override val clientInstance = this@ClientInstance
                 override fun motionSimulator(world: ClientWorld): PlayerMotionSimulator {
                     return gg.mineral.bot.base.client.math.simulation.PlayerMotionSimulator(
-                        this@ClientInstance,
-                        this,
-                        world
+                            this@ClientInstance,
+                            this,
+                            world
                     )
                 }
             }
@@ -386,5 +391,70 @@ open class ClientInstance(
 
     companion object {
         private val logger = LogManager.getLogger(ClientInstance::class.java)
+    }
+
+    /** Updates the bot's state and target entity from external guide data. */
+    fun updateFromGuide(
+            bX: Double,
+            bY: Double,
+            bZ: Double,
+            bYaw: Float,
+            bPitch: Float,
+            bHealth: Float,
+            bFood: Int,
+            bSat: Float,
+            targetUuid: UUID,
+            tX: Double,
+            tY: Double,
+            tZ: Double,
+            tYaw: Float,
+            tPitch: Float,
+            tVelX: Double,
+            tVelY: Double,
+            tVelZ: Double,
+            tHealth: Float,
+            tBlocking: Boolean
+    ) {
+        val player = this.thePlayer
+        if (player != null) {
+            player.setPositionAndRotation(bX, bY, bZ, bYaw, bPitch)
+            player.setHealth(bHealth)
+            // player.foodStats.foodLevel = bFood // Accessor might vary
+            // player.foodStats.saturationLevel = bSat
+        }
+
+        val world = this.theWorld
+        if (world != null) {
+            var targetEntity: net.minecraft.client.entity.EntityOtherPlayerMP? = null
+
+            // Find existing target
+            for (obj in world.getLoadedEntityList()) {
+                if (obj is net.minecraft.client.entity.EntityOtherPlayerMP &&
+                                obj.uniqueID == targetUuid
+                ) {
+                    targetEntity = obj
+                    break
+                }
+            }
+
+            // Create if not exists
+            if (targetEntity == null) {
+                val profile = com.mojang.authlib.GameProfile(targetUuid, "Target")
+                // Constructor appears to be (Minecraft, World, GameProfile) based on errors
+                targetEntity = net.minecraft.client.entity.EntityOtherPlayerMP(this, world, profile)
+
+                // Use a derived ID to be consistent
+                val eid = targetUuid.hashCode()
+
+                world.addEntityToWorld(eid, targetEntity)
+            }
+
+            // Update target state
+            targetEntity.setPositionAndRotation(tX, tY, tZ, tYaw, tPitch)
+            targetEntity.setHealth(tHealth)
+            targetEntity.motionX = tVelX
+            targetEntity.motionY = tVelY
+            targetEntity.motionZ = tVelZ
+        }
     }
 }

@@ -1,6 +1,8 @@
 package net.minecraft.client.entity;
 
 import gg.mineral.bot.api.entity.living.player.ClientPlayerMP;
+import gg.mineral.bot.api.entity.living.player.FakePlayer;
+import gg.mineral.bot.api.instance.ClientInstance;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.audio.MovingSoundMinecartRiding;
 import net.minecraft.client.audio.SoundHandler;
@@ -18,7 +20,7 @@ import net.minecraft.util.MovementInput;
 import net.minecraft.util.Session;
 import net.minecraft.world.World;
 
-public class EntityClientPlayerMP extends EntityPlayerSP implements ClientPlayerMP {
+public class EntityClientPlayerMP extends EntityPlayerSP implements FakePlayer {
     public final NetHandlerPlayClient sendQueue;
     private final StatFileWriter field_146108_bO;
     public double oldPosX;
@@ -57,7 +59,7 @@ public class EntityClientPlayerMP extends EntityPlayerSP implements ClientPlayer
     private String field_142022_ce;
 
     public EntityClientPlayerMP(Minecraft p_i45064_1_, World p_i45064_2_, Session p_i45064_3_,
-                                NetHandlerPlayClient p_i45064_4_, StatFileWriter p_i45064_5_) {
+            NetHandlerPlayClient p_i45064_4_, StatFileWriter p_i45064_5_) {
         super(p_i45064_1_, p_i45064_2_, p_i45064_3_, 0);
         this.sendQueue = p_i45064_4_;
         this.field_146108_bO = p_i45064_5_;
@@ -304,5 +306,10 @@ public class EntityClientPlayerMP extends EntityPlayerSP implements ClientPlayer
     @Override
     public double getLastReportedZ() {
         return this.oldPosZ;
+    }
+
+    @Override
+    public ClientInstance getClientInstance() {
+        return (ClientInstance) this.mc;
     }
 }
