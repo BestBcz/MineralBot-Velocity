@@ -290,6 +290,10 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
     private var nextClick: Long = 0
 
+    private var recentHitsOnTarget = 0
+    private var recentHitsTaken = 0
+    private var hitWindowStartTick = 0
+
     private fun attackTarget() {
         val fakePlayer = clientInstance.fakePlayer
         nextClick = (timeMillis() + fakePlayer.random.nextGaussian(meanDelay.toDouble(), deviation.toDouble())).toLong()
@@ -297,7 +301,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     }
 
     private var resetType = ResetType.OFFENSIVE
-    private val lastResetType = ResetType.OFFENSIVE
+    private var lastResetType = ResetType.OFFENSIVE
     private var strafeDirection: Byte = 0
 
     private fun strafe() {
@@ -400,8 +404,13 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             ResetType.EXTRA_DEFENSIVE -> if (config.sprintResetAccuracy >= 1
                 || fakePlayer.random.nextFloat() < config
                     .sprintResetAccuracy
-            ) pressButton(75, MouseButton.Type.RIGHT_CLICK)
+            ) {
+                // Anti-blockhit rhythm: tap right click right after own hit.
+                pressButton(75, MouseButton.Type.RIGHT_CLICK)
+            }
         }
+
+        lastResetType = resetType
     }
 
     private fun getKB(entity: ClientLivingEntity, meanX: Double, meanY: Double, meanZ: Double): Double {
@@ -491,15 +500,47 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val target = this.target
 
         if (target != null && entity.uuid == target.uuid) {
+            refreshHitWindow()
+            recentHitsOnTarget++
             sprintReset()
             lastSprintResetTick = clientInstance.currentTick
+        } else if (entity.uuid == fakePlayer.uuid) {
+            refreshHitWindow()
+            recentHitsTaken++
         }
 
         return false
     }
 
     public override fun onGameLoop() {
-        strafe()
+        applyHumanizedMovement()
         if (timeMillis() >= nextClick) attackTarget()
+    }
+
+    private fun applyHumanizedMovement() {
+        val target = this.target ?: run {
+            strafe()
+            return
+        }
+
+        val fakePlayer = clientInstance.fakePlayer
+        val distance = fakePlayer.distance3DTo(target)
+        val winningTrade = recentHitsOnTarget >= recentHitsTaken + 1
+
+        // Only keep W-tap style rhythm reset based on trade outcome.
+        if (winningTrade && distance in 2.0..3.4) {
+            unpressKey(90, Key.Type.KEY_W)
+            return
+        }
+
+        strafe()
+    }
+
+    private fun refreshHitWindow() {
+        if (clientInstance.currentTick - hitWindowStartTick > 18) {
+            hitWindowStartTick = clientInstance.currentTick
+            recentHitsOnTarget = 0
+            recentHitsTaken = 0
+        }
     }
 }
