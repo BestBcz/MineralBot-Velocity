@@ -417,24 +417,26 @@ open class ClientInstance(
     ) {
         val player = this.thePlayer
         if (player != null) {
-            // Only force teleport if deviation is large (> 2 blocks)
-            // Otherwise, trust local physics for smooth movement
-            val distSq =
-                    (player.posX - bX) * (player.posX - bX) +
-                            (player.posY - bY) * (player.posY - bY) +
-                            (player.posZ - bZ) * (player.posZ - bZ)
+            val distSq = (player.posX - bX) * (player.posX - bX) +
+                    (player.posY - bY) * (player.posY - bY) +
+                    (player.posZ - bZ) * (player.posZ - bZ)
 
-            if (distSq > 4.0) {
+            if (distSq > 100.0) {
                 player.setPositionAndRotation(bX, bY, bZ, bYaw, bPitch)
             } else {
-                // Still sync rotation as that's less jittery and crucial for aiming validation if
-                // server overrides
-                // Actually, let's trust local rotation too for aiming, but sync health/food always
+                // Soft-Lerp
+                val lerpFactor = 0.3
+
+                player.posX += (bX - player.posX) * lerpFactor
+                player.posY += (bY - player.posY) * lerpFactor
+                player.posZ += (bZ - player.posZ) * lerpFactor
+
+                // 角度同步
+                player.rotationYaw = bYaw
+                player.rotationPitch = bPitch
             }
 
             player.setHealth(bHealth)
-            // player.foodStats.foodLevel = bFood
-            // player.foodStats.saturationLevel = bSat
         }
 
         val world = this.theWorld
