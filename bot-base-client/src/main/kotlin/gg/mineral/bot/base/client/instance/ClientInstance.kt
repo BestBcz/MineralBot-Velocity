@@ -417,27 +417,11 @@ open class ClientInstance(
     ) {
         val player = this.thePlayer
         if (player != null) {
-            val distSq = (player.posX - bX) * (player.posX - bX) +
-                    (player.posY - bY) * (player.posY - bY) +
-                    (player.posZ - bZ) * (player.posZ - bZ)
-
-            if (distSq > 100.0) {
-                player.setPositionAndRotation(bX, bY, bZ, bYaw, bPitch)
-            } else {
-                // Soft-Lerp
-                val lerpFactor = 0.3
-
-                player.posX += (bX - player.posX) * lerpFactor
-                player.posY += (bY - player.posY) * lerpFactor
-                player.posZ += (bZ - player.posZ) * lerpFactor
-
-                // 角度同步
-                player.rotationYaw = bYaw
-                player.rotationPitch = bPitch
-            }
-
             player.setHealth(bHealth)
+            // player.foodStats.foodLevel = bFood // Accessor might vary
+            // player.foodStats.saturationLevel = bSat
         }
+
 
         val world = this.theWorld
         if (world != null) {
