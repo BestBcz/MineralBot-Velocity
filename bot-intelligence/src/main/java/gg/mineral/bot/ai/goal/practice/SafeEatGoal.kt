@@ -34,8 +34,11 @@ class SafeEatGoal(clientInstance: ClientInstance) :
     private var eatingStartTick = 0
     private var comboDetected = false
     private var hitsTaken = 0
+    private var lastEatTick = 0
 
     override fun shouldExecute(): Boolean {
+        if (clientInstance.currentTick - lastEatTick < 30) return false
+
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
 
@@ -47,7 +50,7 @@ class SafeEatGoal(clientInstance: ClientInstance) :
         val distance = distanceAwayFromEnemies()
         val healthCritical = fakePlayer.health < 8
 
-        return (distance > 8.0 || healthCritical) && fakePlayer.health > 12
+        return (distance > 8.0 || healthCritical) && fakePlayer.health > 10
     }
 
     override fun onStart() {
@@ -156,7 +159,8 @@ class SafeEatGoal(clientInstance: ClientInstance) :
 
                 // Jump to avoid getting hit
                 if (fakePlayer.isOnGround && distance < 5) {
-                    pressKey(100, Key.Type.KEY_SPACE)
+                    // Space + S jump-reset creates spacing while still finishing the eat.
+                    pressKey(100, Key.Type.KEY_SPACE, Key.Type.KEY_S)
                 }
             }
         }
@@ -166,6 +170,7 @@ class SafeEatGoal(clientInstance: ClientInstance) :
         eating = false
         comboDetected = false
         hitsTaken = 0
+        lastEatTick = clientInstance.currentTick
         unpressButton(MouseButton.Type.RIGHT_CLICK)
         unpressKey(Key.Type.KEY_SPACE)
     }
