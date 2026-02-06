@@ -42,6 +42,11 @@ public abstract class EntityLivingBase extends Entity implements ClientLivingEnt
     private BaseAttributeMap attributeMap;
     private final CombatTracker _combatTracker = new CombatTracker(this);
     private final Int2ObjectOpenHashMap<PotionEffect> activePotionsMap = new Int2ObjectOpenHashMap<>();
+    private gg.mineral.bot.base.client.profile.KnockbackProfile knockbackProfile;
+
+    public void setKnockbackProfile(gg.mineral.bot.base.client.profile.KnockbackProfile profile) {
+        this.knockbackProfile = profile;
+    }
 
     /**
      * The equipment this mob was previously wearing, used for syncing.
@@ -927,6 +932,46 @@ public abstract class EntityLivingBase extends Entity implements ClientLivingEnt
      * knocks back this entity
      */
     public void knockBack(Entity p_70653_1_, float p_70653_2_, double p_70653_3_, double p_70653_5_) {
+        if (this.knockbackProfile != null) {
+            System.out.println("[BotDebug] Applying Custom Knockback: " + this.knockbackProfile.getName()
+                    + " F=" + this.knockbackProfile.getFriction()
+                    + " H=" + this.knockbackProfile.getHorizontal()
+                    + " V=" + this.knockbackProfile.getVertical()
+                    + " VL=" + this.knockbackProfile.getVerticalLimit());
+            if (this.rand.nextDouble() >= this.getEntityAttribute(SharedMonsterAttributes.knockbackResistance)
+                    .getAttributeValue()) {
+                this.isAirBorne = true;
+                float var7 = MathHelper.sqrt_double(p_70653_3_ * p_70653_3_ + p_70653_5_ * p_70653_5_);
+                double magnitude = var7;
+
+                this.motionX /= this.knockbackProfile.getFriction();
+                this.motionY /= this.knockbackProfile.getFriction();
+                this.motionZ /= this.knockbackProfile.getFriction();
+
+                this.motionX -= p_70653_3_ / magnitude * this.knockbackProfile.getHorizontal();
+                this.motionY += this.knockbackProfile.getVertical();
+                this.motionZ -= p_70653_5_ / magnitude * this.knockbackProfile.getHorizontal();
+
+                // Apply Extra Sprint Knockback if attacker is sprinting player
+                if (p_70653_1_ instanceof net.minecraft.entity.player.EntityPlayer
+                        && ((net.minecraft.entity.player.EntityPlayer) p_70653_1_).isSprinting()) {
+                    this.motionX += (double) (-MathHelper.sin(p_70653_1_.rotationYaw * 3.1415927F / 180.0F) * (float) 1
+                            * this.knockbackProfile.getExtraHorizontal());
+                    this.motionY += this.knockbackProfile.getExtraVertical();
+                    this.motionZ += (double) (MathHelper.cos(p_70653_1_.rotationYaw * 3.1415927F / 180.0F) * (float) 1
+                            * this.knockbackProfile.getExtraHorizontal());
+                }
+
+                if (this.motionY > this.knockbackProfile.getVerticalLimit()) {
+                    this.motionY = this.knockbackProfile.getVerticalLimit();
+                }
+
+                // Ensure velocity update is flagged
+                this.velocityChanged = true;
+            }
+            return;
+        }
+
         if (this.rand.nextDouble() >= this.getEntityAttribute(SharedMonsterAttributes.knockbackResistance)
                 .getAttributeValue()) {
             this.isAirBorne = true;
@@ -1127,7 +1172,7 @@ public abstract class EntityLivingBase extends Entity implements ClientLivingEnt
     public EntityLivingBase func_94060_bK() {
         return (EntityLivingBase) (this._combatTracker.func_94550_c() != null ? this._combatTracker.func_94550_c()
                 : (this.attackingPlayer != null ? this.attackingPlayer
-                : (this.entityLivingToAttack != null ? this.entityLivingToAttack : null)));
+                        : (this.entityLivingToAttack != null ? this.entityLivingToAttack : null)));
     }
 
     public final float getMaxHealth() {
@@ -1158,8 +1203,8 @@ public abstract class EntityLivingBase extends Entity implements ClientLivingEnt
         return this.isPotionActive(Potion.digSpeed)
                 ? 6 - (1 + this.getActivePotionEffect(Potion.digSpeed).getAmplifier()) * 1
                 : (this.isPotionActive(Potion.digSlowdown)
-                ? 6 + (1 + this.getActivePotionEffect(Potion.digSlowdown).getAmplifier()) * 2
-                : 6);
+                        ? 6 + (1 + this.getActivePotionEffect(Potion.digSlowdown).getAmplifier()) * 2
+                        : 6);
     }
 
     /**
@@ -1330,7 +1375,7 @@ public abstract class EntityLivingBase extends Entity implements ClientLivingEnt
 
                         if (World.doesBlockHaveSolidTopSurface(this.worldObj, var12, (int) this.posY - 1, var13)
                                 || this.worldObj.getBlock(var12, (int) this.posY - 1, var13)
-                                .getMaterial() == Material.water) {
+                                        .getMaterial() == Material.water) {
                             var3 = this.posX + (double) var10;
                             var5 = this.posY + 1.0D;
                             var7 = this.posZ + (double) var11;
@@ -1755,7 +1800,7 @@ public abstract class EntityLivingBase extends Entity implements ClientLivingEnt
      * posY, posZ, yaw, pitch
      */
     public void setPositionAndRotation2(double p_70056_1_, double p_70056_3_, double p_70056_5_, float p_70056_7_,
-                                        float p_70056_8_, int p_70056_9_) {
+            float p_70056_8_, int p_70056_9_) {
         this.yOffset = 0.0F;
         this.newPosX = p_70056_1_;
         this.newPosY = p_70056_3_;

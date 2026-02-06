@@ -422,7 +422,6 @@ open class ClientInstance(
             // player.foodStats.saturationLevel = bSat
         }
 
-
         val world = this.theWorld
         if (world != null) {
             var targetEntity: net.minecraft.client.entity.EntityOtherPlayerMP? = null
@@ -452,6 +451,14 @@ open class ClientInstance(
             targetEntity.motionX = tVelX
             targetEntity.motionY = tVelY
             targetEntity.motionZ = tVelZ
+        }
+    }
+
+    fun updateKnockbackProfile(profile: gg.mineral.bot.base.client.profile.KnockbackProfile) {
+        val player = this.thePlayer
+        if (player != null) {
+            player.setKnockbackProfile(profile)
+            logger.info("Updated knockback profile for {}", player.commandSenderName)
         }
     }
 }

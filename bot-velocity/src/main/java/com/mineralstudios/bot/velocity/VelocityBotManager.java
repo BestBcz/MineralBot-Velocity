@@ -178,8 +178,40 @@ public class VelocityBotManager {
             case SUB_CHANNEL_BOT_GUIDE:
                 handleBotGuide(in);
                 break;
+            case "BotKnockback":
+                handleBotKnockback(in);
+                break;
             default:
                 logger.info("Ignored subchannel: {}", subChannel);
+        }
+    }
+
+    private void handleBotKnockback(ByteArrayDataInput in) {
+        try {
+            // Read data
+            String profileName = in.readUTF();
+            double friction = in.readDouble();
+            double horizontal = in.readDouble();
+            double vertical = in.readDouble();
+            double verticalLimit = in.readDouble();
+            double extraHorizontal = in.readDouble();
+            double extraVertical = in.readDouble();
+            double recoilMultiplier = in.readDouble();
+
+            gg.mineral.bot.base.client.profile.KnockbackProfile profile = new gg.mineral.bot.base.client.profile.KnockbackProfile(
+                    profileName, friction, horizontal, vertical, verticalLimit, extraHorizontal, extraVertical,
+                    recoilMultiplier);
+
+            logger.info("Received BotKnockback profile: {}", profileName);
+
+            // Forward to all active bots for now
+            for (ClientInstance bot : activeBots.values()) {
+                if (bot.isRunning()) {
+                    bot.updateKnockbackProfile(profile);
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Failed to handle BotKnockback", e);
         }
     }
 
