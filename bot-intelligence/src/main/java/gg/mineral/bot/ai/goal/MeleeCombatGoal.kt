@@ -289,30 +289,15 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     }
 
     private var nextClick: Long = 0
-    private var clickStreak = 0
-    private var fatigueUntil = 0L
-
-    private var recentHitsOnTarget = 0
-    private var recentHitsTaken = 0
-    private var hitWindowStartTick = 0
 
     private fun attackTarget() {
-        if (timeMillis() < fatigueUntil) return
-
         val fakePlayer = clientInstance.fakePlayer
         nextClick = (timeMillis() + fakePlayer.random.nextGaussian(meanDelay.toDouble(), deviation.toDouble())).toLong()
         pressButton(25, MouseButton.Type.LEFT_CLICK)
-
-        clickStreak++
-        if (clickStreak >= fakePlayer.random.nextInt(7, 13)) {
-            // Human-like micro pauses to avoid machine-perfect click pacing.
-            fatigueUntil = timeMillis() + fakePlayer.random.nextLong(120L, 240L)
-            clickStreak = 0
-        }
     }
 
     private var resetType = ResetType.OFFENSIVE
-    private var lastResetType = ResetType.OFFENSIVE
+    private val lastResetType = ResetType.OFFENSIVE
     private var strafeDirection: Byte = 0
 
     private fun strafe() {
@@ -415,13 +400,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             ResetType.EXTRA_DEFENSIVE -> if (config.sprintResetAccuracy >= 1
                 || fakePlayer.random.nextFloat() < config
                     .sprintResetAccuracy
-            ) {
-                // Anti-blockhit rhythm: tap right click right after own hit.
-                pressButton(75, MouseButton.Type.RIGHT_CLICK)
-            }
+            ) pressButton(75, MouseButton.Type.RIGHT_CLICK)
         }
-
-        lastResetType = resetType
     }
 
     private fun getKB(entity: ClientLivingEntity, meanX: Double, meanY: Double, meanZ: Double): Double {
@@ -511,67 +491,15 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val target = this.target
 
         if (target != null && entity.uuid == target.uuid) {
-            refreshHitWindow()
-            recentHitsOnTarget++
             sprintReset()
             lastSprintResetTick = clientInstance.currentTick
-        } else if (entity.uuid == fakePlayer.uuid) {
-            refreshHitWindow()
-            recentHitsTaken++
         }
 
         return false
     }
 
     public override fun onGameLoop() {
-        applyHumanizedMovement()
+        strafe()
         if (timeMillis() >= nextClick) attackTarget()
-    }
-
-    private fun applyHumanizedMovement() {
-        val target = this.target ?: run {
-            strafe()
-            return
-        }
-
-        val fakePlayer = clientInstance.fakePlayer
-        val distance = fakePlayer.distance3DTo(target)
-
-        val canForceAgro = recentHitsOnTarget >= recentHitsTaken + 2 || (target.isSprinting && distance > 4.4)
-        if (canForceAgro && distance < 6.2) {
-            // Tryhard agro: hard commit when trade is favorable or target is disengaging.
-            pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
-            unpressKey(Key.Type.KEY_S)
-            if (distance < 3.6) unpressKey(80, Key.Type.KEY_A, Key.Type.KEY_D)
-            return
-        }
-
-        // If losing trades at close range, use jump-reset (S + SPACE) to create distance.
-        if (distance < 3.2 && recentHitsTaken - recentHitsOnTarget >= 2 && fakePlayer.isOnGround) {
-            pressKey(120, Key.Type.KEY_S, Key.Type.KEY_SPACE)
-            unpressKey(120, Key.Type.KEY_W)
-            return
-        }
-
-        val winningTrade = recentHitsOnTarget >= recentHitsTaken + 1
-        if (winningTrade && distance in 2.0..3.4) {
-            // Alternate between W-tap and S-tap windows to keep combo rhythm less robotic.
-            if (clientInstance.currentTick % 7 < 3) {
-                unpressKey(90, Key.Type.KEY_W)
-            } else {
-                pressKey(80, Key.Type.KEY_S)
-                unpressKey(80, Key.Type.KEY_W)
-            }
-        } else {
-            strafe()
-        }
-    }
-
-    private fun refreshHitWindow() {
-        if (clientInstance.currentTick - hitWindowStartTick > 18) {
-            hitWindowStartTick = clientInstance.currentTick
-            recentHitsOnTarget = 0
-            recentHitsTaken = 0
-        }
     }
 }

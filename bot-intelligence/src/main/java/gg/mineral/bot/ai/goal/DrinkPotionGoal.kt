@@ -20,22 +20,14 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     override var startTime: Long = 0
     override val maxDuration: Long = 100
     private var drinking = false
-    private var lastDrinkTick = 0
-    private var nextDrinkAllowedTick = 0
 
     override fun shouldExecute(): Boolean {
-        if (clientInstance.currentTick < nextDrinkAllowedTick) return false
-
         val shouldExecute = canSeeEnemy() && hasDrinkablePotion()
         logger.debug("Checking shouldExecute: $shouldExecute")
         return shouldExecute
     }
 
     override fun onStart() {
-        // Human-like pacing: don't insta-drink at exact same timing every round.
-        val randomDelay = clientInstance.fakePlayer.random.nextInt(6, 15)
-        nextDrinkAllowedTick = clientInstance.currentTick + randomDelay
-
         pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
         unpressKey(Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
     }
@@ -152,9 +144,6 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
         tick.finishIf("Potion Not Needed", !shouldExecute())
 
-        val safeDistance = distanceAwayFromEnemies()
-        tick.finishIf("Unsafe Drink Timing", safeDistance < 4.2)
-
         tick.prerequisite("Drinking", drinking && getButton(MouseButton.Type.RIGHT_CLICK).isPressed) {
             pressButton(MouseButton.Type.RIGHT_CLICK)
             drinking = true
@@ -169,8 +158,6 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     }
 
     override fun onEnd() {
-        lastDrinkTick = clientInstance.currentTick
-        nextDrinkAllowedTick = lastDrinkTick + 40
         drinking = false
         unpressButton(MouseButton.Type.RIGHT_CLICK)
         unpressKey(Key.Type.KEY_SPACE)

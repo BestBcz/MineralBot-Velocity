@@ -72,18 +72,13 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
             }
         },
         SIDE {
-            override fun test(fakePlayer: FakePlayer, entity: ClientLivingEntity): Boolean {
-                val distance2D = fakePlayer.distance2DTo(entity.x, entity.z)
-                return fakePlayer.isOnGround && distance2D in 3.2..6.3
-            }
+            override fun test(fakePlayer: FakePlayer, entity: ClientLivingEntity) =
+                false /*fakePlayer.distance2DTo(entity.x, entity.z) in 3.6..6.0 && fakePlayer.isOnGround*/
         },
         FORWARD {
-            override fun test(fakePlayer: FakePlayer, entity: ClientLivingEntity): Boolean {
-                val distance = fakePlayer.distance3DTo(entity)
-                return distance > 5.2 || (distance > 4.2 && entity.isSprinting)
-            }
+            override fun test(fakePlayer: FakePlayer, entity: ClientLivingEntity) =
+                fakePlayer.distance3DTo(entity) > 6.0
         };
-
 
         abstract fun test(fakePlayer: FakePlayer, entity: ClientLivingEntity): Boolean
     }
@@ -103,15 +98,9 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
             ) fakePlayer.distance3DTo(it) else Double.MAX_VALUE
         } ?: return false
 
-        val health = fakePlayer.health
-        val distance = fakePlayer.distance3DTo(entity)
+        for (t in Type.entries) if (t.test(fakePlayer, entity)) return fakePlayer.health > 16.0
 
-        // Tryhard/agro style pearl usage: much more aggressive than ranked ladder pacing.
-        val canAgroPearl = health > 10.0 || (health > 7.0 && distance > 5.8)
-        if (!canAgroPearl) return false
-
-        // Prefer side pearl in medium range, forward pearl when target is opening space.
-        return Type.SIDE.test(fakePlayer, entity) || Type.FORWARD.test(fakePlayer, entity)
+        return false
     }
 
     override fun onStart() {
@@ -260,10 +249,7 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         }*/
 
         // Temporary implementation
-        val angles = when (type) {
-            Type.SIDE -> getSidePearlAngles(fakePlayer, entity)
-            else -> getAngles(fakePlayer, entity)
-        }
+        val angles = getAngles(fakePlayer, entity)
         setMouseYaw(angles[0])
         setMousePitch(angles[1])
 
@@ -312,23 +298,6 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         return floatArrayOf(yaw, -pitch)
     }
 
-
-    private fun getSidePearlAngles(player: ClientPlayer, entity: ClientPlayer): FloatArray {
-        val baseAngles = getAngles(player, entity)
-        val distance = player.distance2DTo(entity.x, entity.z)
-        val sideOffset = if (entity.isSprinting) 32f else 24f
-        val strafeBias = if (distance > 5.0) sideOffset else sideOffset * 0.75f
-
-        val relativeX = entity.x - player.x
-        val relativeZ = entity.z - player.z
-        val cross = relativeX * (entity.z - entity.lastZ) - relativeZ * (entity.x - entity.lastX)
-        val sideSign = if (cross >= 0) 1f else -1f
-
-        val yaw = baseAngles[0] + (strafeBias * sideSign)
-        val pitch = (baseAngles[1] + 6.0f).coerceIn(-80f, 65f)
-
-        return floatArrayOf(yaw, pitch)
-    }
     private fun minimizePitch(
         fakePlayer: FakePlayer,
         yaw: Float,
