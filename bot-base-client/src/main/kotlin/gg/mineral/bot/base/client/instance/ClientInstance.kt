@@ -71,6 +71,9 @@ open class ClientInstance(
     // Delayed tasks queue.
     private val delayedTasks = ConcurrentLinkedQueue<DelayedTask>()
 
+    // Guide-created ghost targets so we can clean them up when real server entities exist.
+    private val guideTargetEntityIds = mutableMapOf<UUID, Int>()
+
     override var latency: Int = 0
 
     override var currentTick: Int = 0
@@ -424,30 +427,31 @@ open class ClientInstance(
 
         val world = this.theWorld
         if (world != null) {
-            var targetEntity: net.minecraft.client.entity.EntityOtherPlayerMP? = null
+            var targetEntity = world.playerEntities.firstOrNull { it.gameProfile.id == targetUuid }
+            val guideEid = targetUuid.hashCode() or Int.MIN_VALUE
 
-            // Optimize: Lookup by ID directly since we use consistent IDs
-            val eid = targetUuid.hashCode()
-            val existing = world.getEntityByID(eid)
-            if (existing is net.minecraft.client.entity.EntityOtherPlayerMP) {
-                targetEntity = existing
-            }
-
-            // Create if not exists
-            if (targetEntity == null) {
-                val profile = com.mojang.authlib.GameProfile(targetUuid, "Target")
-                // Constructor appears to be (Minecraft, World, GameProfile) based on errors
-                targetEntity = net.minecraft.client.entity.EntityOtherPlayerMP(this, world, profile)
-
-                // Use a derived ID to be consistent
-                val eid = targetUuid.hashCode()
-
-                world.addEntityToWorld(eid, targetEntity)
+            if (targetEntity != null) {
+                guideTargetEntityIds.remove(targetUuid)?.let { world.removeEntityFromWorld(it) }
+            } else {
+                val existing = world.getEntityByID(guideEid)
+                targetEntity = if (existing is net.minecraft.client.entity.EntityOtherPlayerMP) {
+                    existing
+                } else {
+                    val profile = com.mojang.authlib.GameProfile(targetUuid, "Target")
+                    net.minecraft.client.entity.EntityOtherPlayerMP(this, world, profile).also {
+                        // This guide-only entity is for aim info and must not affect collisions/knockback.
+                        it.noClip = true
+                        world.addEntityToWorld(guideEid, it)
+                        guideTargetEntityIds[targetUuid] = guideEid
+                    }
+                }
             }
 
             // Update target state - Target MUST be exact as we don't simulate it
             targetEntity.setPositionAndRotation(tX, tY, tZ, tYaw, tPitch)
-            targetEntity.setHealth(tHealth)
+            if (targetEntity is net.minecraft.entity.EntityLivingBase) {
+                targetEntity.setHealth(tHealth)
+            }
             targetEntity.motionX = tVelX
             targetEntity.motionY = tVelY
             targetEntity.motionZ = tVelZ
