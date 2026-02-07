@@ -23,6 +23,10 @@ public class GuiDisconnected extends GuiScreen {
         System.out.println("Disconnected: " + this.field_146306_a + " - " + this.field_146304_f.getUnformattedText());
     }
 
+    public IChatComponent getReason() {
+        return this.field_146304_f;
+    }
+
     /**
      * Fired when a key is typed. This is the equivalent of
      * KeyListener.keyTyped(KeyEvent e).
@@ -37,8 +41,10 @@ public class GuiDisconnected extends GuiScreen {
         this.buttonList.clear();
         this.buttonList.add(new GuiButton(this.mc, 0, this.width / 2 - 100, this.height / 4 + 120 + 12,
                 I18n.format("gui.toMenu", new Object[0])));
-        this.field_146305_g =  this.fontRendererObj != null? this.fontRendererObj.listFormattedStringToWidth(this.field_146304_f.getFormattedText(),
-                this.width - 50) : new ArrayList<>();
+        this.field_146305_g = this.fontRendererObj != null
+                ? this.fontRendererObj.listFormattedStringToWidth(this.field_146304_f.getFormattedText(),
+                        this.width - 50)
+                : new ArrayList<>();
     }
 
     protected void actionPerformed(GuiButton p_146284_1_) {

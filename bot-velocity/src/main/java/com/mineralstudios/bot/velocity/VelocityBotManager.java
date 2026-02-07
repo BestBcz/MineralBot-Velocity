@@ -19,6 +19,9 @@ import gg.mineral.bot.api.configuration.BotConfiguration;
 import gg.mineral.bot.ai.goal.practice.PracticeAI;
 import com.google.common.collect.ArrayListMultimap;
 import java.net.Proxy;
+import java.util.Random;
+import net.minecraft.client.gui.GuiDisconnected;
+import net.minecraft.util.IChatComponent;
 
 public class VelocityBotManager {
 
@@ -225,7 +228,7 @@ public class VelocityBotManager {
 
             logger.info("Received BotDuel request: Player={}, Server={}, Kit={}", playerUUID, serverName, kitType);
 
-            createAndConnectBot(playerUUID, serverName, kitType);
+            createAndConnectBot(playerUUID, serverName, kitType, 0);
         } catch (Exception e) {
             logger.error("Failed to parse BotDuel message", e);
         }
@@ -355,7 +358,7 @@ public class VelocityBotManager {
         }
     }
 
-    private void createAndConnectBot(UUID playerUUID, String serverName, String kitType) {
+    private void createAndConnectBot(UUID playerUUID, String serverName, String kitType, int retryCount) {
         server.getScheduler().buildTask(plugin, () -> {
             try {
                 // Get Server Info
@@ -368,7 +371,21 @@ public class VelocityBotManager {
                 // Configure Bot
                 BotConfiguration config = new BotConfiguration();
                 UUID botUUID = UUID.randomUUID();
+
+                // Name System: Base name + Kit + (Optional) Random identifier on retry
                 String botUsername = "Bot_" + kitType;
+                if (retryCount > 0) {
+                    // Add random characters to bypass frequent connection limits
+                    String chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+                    StringBuilder sb = new StringBuilder();
+                    Random random = new Random();
+                    for (int i = 0; i < 4; i++) {
+                        sb.append(chars.charAt(random.nextInt(chars.length())));
+                    }
+                    botUsername = botUsername + "_" + sb.toString();
+                    logger.info("Retrying with new bot name: {} (Retry #{})", botUsername, retryCount);
+                }
+
                 config.setUuid(botUUID);
                 config.setUsername(botUsername);
                 config.setDebug(false);
@@ -395,7 +412,7 @@ public class VelocityBotManager {
                 activeBots.put(botUUID, bot);
                 botTargets.put(botUUID, playerUUID);
                 kitTypes.put(botUUID, kitType);
-                botsByUsername.put(botUsername, botUUID);
+                botsByUsername.put(config.getUsername(), botUUID);
 
                 // Initialize
                 logger.info("Starting bot instance for {} (UUID: {})", config.getUsername(), botUUID);
@@ -416,11 +433,47 @@ public class VelocityBotManager {
                 }).delay(3, TimeUnit.SECONDS).schedule(); // 3 second delay to ensure connection
 
                 // Schedule Game Loop
+                final String finalBotUsername = config.getUsername();
                 com.velocitypowered.api.scheduler.ScheduledTask loopTask = server.getScheduler()
                         .buildTask(plugin, () -> {
                             if (bot.isRunning()) {
                                 try {
                                     bot.runGameLoop();
+
+                                    // Check for "Frequent connection" kick
+                                    Object currentScreen = bot.getCurrentScreen();
+                                    if (currentScreen instanceof GuiDisconnected) {
+                                        GuiDisconnected disconnectedScreen = (GuiDisconnected) currentScreen;
+                                        IChatComponent reason = disconnectedScreen.getReason();
+                                        if (reason != null) {
+                                            String text = reason.getUnformattedText();
+                                            if (text.contains("你的链接次数过于频繁") || text.contains("稍后再试")) {
+                                                logger.warn(
+                                                        "Bot {} was kicked for frequent connection. Initializing retry...",
+                                                        finalBotUsername);
+
+                                                // Clean up current bot
+                                                bot.shutdown();
+                                                activeBots.remove(botUUID);
+                                                botTargets.remove(botUUID);
+                                                kitTypes.remove(botUUID);
+                                                botsByUsername.remove(finalBotUsername);
+
+                                                com.velocitypowered.api.scheduler.ScheduledTask t = botTasks
+                                                        .remove(botUUID);
+                                                if (t != null) {
+                                                    t.cancel();
+                                                }
+
+                                                // Retry with new name after a small delay
+                                                server.getScheduler().buildTask(plugin, () -> {
+                                                    createAndConnectBot(playerUUID, serverName, kitType,
+                                                            retryCount + 1);
+                                                }).delay(1, TimeUnit.SECONDS).schedule();
+                                                return;
+                                            }
+                                        }
+                                    }
                                 } catch (Exception e) {
                                     logger.error("Error in bot game loop", e);
                                 }
@@ -429,7 +482,7 @@ public class VelocityBotManager {
                                 activeBots.remove(botUUID);
                                 botTargets.remove(botUUID);
                                 kitTypes.remove(botUUID);
-                                botsByUsername.remove(botUsername);
+                                botsByUsername.remove(finalBotUsername);
 
                                 // Self-cancel
                                 com.velocitypowered.api.scheduler.ScheduledTask t = botTasks.remove(botUUID);
