@@ -119,8 +119,8 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             }
 
             // Select the potion
-            tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == healthSlot) {
-                pressKey(10, Key.Type.valueOf("KEY_" + (healthSlot + 1)))
+            tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(healthSlot)) {
+                selectHotbarSlot(resolveHotbarSlot(healthSlot))
             }
 
             // Verify we're holding a health pot
@@ -535,7 +535,8 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             SearchInterval(-90.0, 90.0)
         )
 
-        return result.value.toFloat()
+        // NOTE: result.point is the pitch angle argument; result.value is only the objective score.
+        return result.point.toFloat()
     }
 
     private fun hasHitBlock(world: ClientWorld?, x: Double, y: Double, z: Double): Boolean {

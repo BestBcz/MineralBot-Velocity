@@ -105,8 +105,8 @@ class HealSoupGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstanc
             )
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == soupSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (soupSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(soupSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(soupSlot))
         }
 
         tick.finishIf("Not Holding Valid Soup", inventory.heldItemStack?.item?.id != Item.MUSHROOM_STEW)
