@@ -289,6 +289,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     }
 
     private var nextClick: Long = 0
+    private var lastSearchTurnTick = 0
+    private var searchTurnDirection = 1
 
     private var recentHitsOnTarget = 0
     private var recentHitsTaken = 0
