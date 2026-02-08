@@ -32,8 +32,12 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (needsEmergencyWater()) return true
         if (isBowThreatActive()) return hasBlocks()
 
-        // BuildUHC opening: around 4s after spawn, pre-gap once then start full fight.
-        if (!preFightGappleUsed && clientInstance.currentTick - matchStartTick >= 80 && hasNormalGapple()) {
+        // BuildUHC opening: around 4s after spawn, pre-gap once when enemy is not already close.
+        if (!preFightGappleUsed &&
+                clientInstance.currentTick - matchStartTick >= 80 &&
+                hasNormalGapple() &&
+                (enemy == null || fakePlayer.distance3DTo(enemy) > 10.0)
+        ) {
             return true
         }
 
@@ -212,17 +216,17 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val enemy = getClosestEnemy() ?: return false
         val fakePlayer = clientInstance.fakePlayer
         val distance = fakePlayer.distance3DTo(enemy)
-        if (distance < 8.0) return false
+        if (distance < 7.0) return false
 
         val expected = computeOptimalYawAndPitch(enemy, fakePlayer)
         val enemyYawDiff = kotlin.math.abs(angleDifference(enemy.yaw, expected[1]))
         val enemyPitchDiff = kotlin.math.abs(angleDifference(enemy.pitch, expected[0]))
 
-        if (enemyYawDiff < 14f && enemyPitchDiff < 12f) {
+        if (enemyYawDiff < 30f && enemyPitchDiff < 24f) {
             lastBowThreatTick = clientInstance.currentTick
         }
 
-        return clientInstance.currentTick - lastBowThreatTick <= 16
+        return clientInstance.currentTick - lastBowThreatTick <= 26
     }
 
     private fun handleBowDefense(tick: Tick, enemy: ClientPlayer, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
@@ -240,9 +244,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             val angles = computeOptimalYawAndPitch(clientInstance.fakePlayer, enemy)
             setMouseYaw(angles[1])
             // place against feet-level in front to form quick wall segments
-            setMousePitch(70f)
-            pressButton(80, MouseButton.Type.RIGHT_CLICK)
-            lockAction(12)
+            setMousePitch(74f)
+            pressButton(120, MouseButton.Type.RIGHT_CLICK)
+            lockAction(16)
         }
         return true
     }
@@ -282,7 +286,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             if (handleBowDefense(tick, enemy, inventory)) return
         }
 
-        if (!preFightGappleUsed && clientInstance.currentTick - matchStartTick >= 80 && hasNormalGapple()) {
+        if (!preFightGappleUsed &&
+                clientInstance.currentTick - matchStartTick >= 80 &&
+                hasNormalGapple() &&
+                (enemy == null || fakePlayer.distance3DTo(enemy) > 10.0)
+        ) {
             val openerGapple = getGoldenAppleSlot(preferHead = false)
             if (openerGapple != -1) {
                 tick.prerequisite("Opener Gapple In Hotbar", openerGapple <= 8) {
@@ -359,10 +367,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
                     setMouseYaw(yaw)
                     setMousePitch(45f)
-
-                    if (!isAimAligned(fakePlayer.yaw, yaw, 10f)) {
-                        return@execute
-                    }
 
                     if (!isAimAligned(fakePlayer.yaw, yaw, 10f)) {
                         return@execute

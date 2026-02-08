@@ -122,7 +122,11 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
                 val dx = predictedX - fakePlayer.x
                 val dz = predictedZ - fakePlayer.z
-                val dy = (enemy.y + enemy.eyeHeight) - (fakePlayer.y + fakePlayer.eyeHeight)
+                val targetY =
+                        if (enemy.isOnGround)
+                                enemy.y + 0.55
+                        else enemy.y + enemy.eyeHeight * 0.75
+                val dy = targetY - (fakePlayer.y + fakePlayer.eyeHeight)
 
                 val horizDist = sqrt(dx * dx + dz * dz)
                 val yaw =
@@ -136,11 +140,12 @@ class FishingRodGoal(clientInstance: ClientInstance) :
                             }
                         }
 
-                // Compensate for projectile arc
-                // Keep rod aim lower so grounded targets are hookable more often.
-                val pitch =
-                        Math.toDegrees(-fastArcTan(dy / horizDist)).toFloat() +
-                                (horizDist / 16).toFloat()
+                // Keep rod aim lower for grounded targets, but a bit higher if enemy is airborne.
+                val basePitch = Math.toDegrees(-fastArcTan(dy / horizDist)).toFloat()
+                val downwardBias =
+                        ((horizDist / 10.0).coerceIn(4.0, 12.0) - if (enemy.isOnGround) 0.0 else 1.5)
+                                .toFloat()
+                val pitch = (basePitch + downwardBias).coerceIn(-25f, 30f)
 
                 setMouseYaw(yaw)
                 setMousePitch(pitch)
