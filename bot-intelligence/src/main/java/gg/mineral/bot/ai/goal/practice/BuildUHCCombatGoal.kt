@@ -213,22 +213,23 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return isInDangerousBlock() && hasWater()
     }
 
-    // Approximation: if enemy aims closely at us from medium/far range, treat as bow threat.
+    // Approximation: if enemy is medium/far and looking in our direction, treat as bow threat.
+    // We intentionally keep this window wider to react earlier against bow kiting.
     private fun isBowThreatActive(): Boolean {
         val enemy = getClosestEnemy() ?: return false
         val fakePlayer = clientInstance.fakePlayer
         val distance = fakePlayer.distance3DTo(enemy)
-        if (distance < 7.0) return false
+        if (distance < 6.0) return false
 
         val expected = computeOptimalYawAndPitch(enemy, fakePlayer)
         val enemyYawDiff = kotlin.math.abs(angleDifference(enemy.yaw, expected[1]))
         val enemyPitchDiff = kotlin.math.abs(angleDifference(enemy.pitch, expected[0]))
 
-        if (enemyYawDiff < 30f && enemyPitchDiff < 24f) {
+        if (enemyYawDiff < 42f && enemyPitchDiff < 32f) {
             lastBowThreatTick = clientInstance.currentTick
         }
 
-        return clientInstance.currentTick - lastBowThreatTick <= 26
+        return clientInstance.currentTick - lastBowThreatTick <= 34
     }
 
     private fun handleBowDefense(tick: Tick, enemy: ClientPlayer, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
@@ -244,11 +245,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
         tick.execute {
             val angles = computeOptimalYawAndPitch(clientInstance.fakePlayer, enemy)
+            // Face enemy first, then force view to own front-ground so block places on ground ahead.
             setMouseYaw(angles[1])
-            // place against feet-level in front to form quick wall segments
-            setMousePitch(74f)
-            pressButton(120, MouseButton.Type.RIGHT_CLICK)
-            lockAction(16)
+            setMousePitch(86f)
+            pressButton(180, MouseButton.Type.RIGHT_CLICK)
+            lockAction(18)
         }
         return true
     }
