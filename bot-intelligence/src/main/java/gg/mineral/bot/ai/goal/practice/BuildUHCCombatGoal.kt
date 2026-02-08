@@ -390,6 +390,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     override fun onEnd() {
         unpressButton(MouseButton.Type.RIGHT_CLICK)
+        heldUtilitySlot = -1
     }
 
     override fun onEvent(event: Event): Boolean {
