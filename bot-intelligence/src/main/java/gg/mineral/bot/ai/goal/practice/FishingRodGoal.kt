@@ -37,7 +37,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
     override fun shouldExecute(): Boolean {
         // Rod cooldown (about 2 seconds)
-        if (clientInstance.currentTick - lastRodTick < 40) return false
+        if (clientInstance.currentTick - lastRodTick < 24) return false
 
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
@@ -108,8 +108,8 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
         tick.prerequisite("In Hotbar", rodSlot <= 8) { moveItemToHotbar(rodSlot, inventory) }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == rodSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (rodSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(rodSlot))
         }
 
         tick.finishIf("Not Holding Rod", inventory.heldItemStack?.item?.id != Item.FISHING_ROD)
@@ -117,8 +117,8 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         when (rodState) {
             RodState.IDLE -> {
                 // Aim at enemy with prediction
-                val predictedX = enemy.x + (enemy.x - enemy.lastX) * 3
-                val predictedZ = enemy.z + (enemy.z - enemy.lastZ) * 3
+                val predictedX = enemy.x + (enemy.x - enemy.lastX) * 2
+                val predictedZ = enemy.z + (enemy.z - enemy.lastZ) * 2
 
                 val dx = predictedX - fakePlayer.x
                 val dz = predictedZ - fakePlayer.z
@@ -137,9 +137,10 @@ class FishingRodGoal(clientInstance: ClientInstance) :
                         }
 
                 // Compensate for projectile arc
+                // Keep rod aim lower so grounded targets are hookable more often.
                 val pitch =
-                        Math.toDegrees(-fastArcTan(dy / horizDist)).toFloat() -
-                                (horizDist / 10).toFloat()
+                        Math.toDegrees(-fastArcTan(dy / horizDist)).toFloat() +
+                                (horizDist / 16).toFloat()
 
                 setMouseYaw(yaw)
                 setMousePitch(pitch)

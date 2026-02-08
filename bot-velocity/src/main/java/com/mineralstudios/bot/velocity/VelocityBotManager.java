@@ -359,6 +359,13 @@ public class VelocityBotManager {
                 config.setUsername(botUsername);
                 config.setDebug(false);
 
+                // ===== Bot CPS tuning =====
+                // If you want to change attack speed, modify these two values:
+                // averageCps: base clicks-per-second
+                // cpsDeviation: random fluctuation range around averageCps
+                config.setAverageCps(10.0f);
+                config.setCpsDeviation(1.0f);
+
                 // Create ClientInstance
                 File runDir = new File("bot-run/" + config.getUuid());
                 runDir.mkdirs();
