@@ -289,6 +289,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     }
 
     private var nextClick: Long = 0
+    private var lastSearchTurnTick = 0
+    private var searchTurnDirection = 1
 
     private var recentHitsOnTarget = 0
     private var recentHitsTaken = 0
@@ -296,7 +298,15 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
     private fun attackTarget() {
         val fakePlayer = clientInstance.fakePlayer
-        nextClick = (timeMillis() + fakePlayer.random.nextGaussian(meanDelay.toDouble(), deviation.toDouble())).toLong()
+        nextClick =
+                (timeMillis() +
+                                fakePlayer.random.nextGaussian(
+                                        meanDelay.toDouble(),
+                                        deviation.toDouble()
+                                ))
+                        .toLong()
+
+        if (target == null) return
         pressButton(25, MouseButton.Type.LEFT_CLICK)
     }
 
@@ -472,8 +482,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             )
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == meleeWeaponSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (meleeWeaponSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(meleeWeaponSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
         }
 
         tick.execute {
@@ -517,9 +527,22 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         if (timeMillis() >= nextClick) attackTarget()
     }
 
+
+    private fun searchForTarget() {
+        val fakePlayer = clientInstance.fakePlayer
+        if (clientInstance.currentTick - lastSearchTurnTick < 4) return
+
+        val step = fakePlayer.random.nextFloat() * 10f + 8f
+        setMouseYaw(fakePlayer.yaw + (step * searchTurnDirection))
+
+        if (clientInstance.currentTick % 25 == 0) searchTurnDirection *= -1
+        lastSearchTurnTick = clientInstance.currentTick
+    }
+
     private fun applyHumanizedMovement() {
         val target = this.target ?: run {
-            strafe()
+            searchForTarget()
+            unpressKey(Key.Type.KEY_A, Key.Type.KEY_D)
             return
         }
 

@@ -119,8 +119,8 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             }
 
             // Select the potion
-            tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == healthSlot) {
-                pressKey(10, Key.Type.valueOf("KEY_" + (healthSlot + 1)))
+            tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(healthSlot)) {
+                selectHotbarSlot(resolveHotbarSlot(healthSlot))
             }
 
             // Verify we're holding a health pot

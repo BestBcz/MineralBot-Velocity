@@ -66,8 +66,8 @@ class SelectKitGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstan
             moveItemToHotbar(bookSlot, inventory)
         }
         
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == bookSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (bookSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(bookSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(bookSlot))
         }
         
         // Verify we're holding the enchanted book

@@ -110,8 +110,8 @@ class EatGoldenHeadGoal(clientInstance: ClientInstance) :
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == headSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (headSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(headSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(headSlot))
         }
 
         tick.finishIf(
