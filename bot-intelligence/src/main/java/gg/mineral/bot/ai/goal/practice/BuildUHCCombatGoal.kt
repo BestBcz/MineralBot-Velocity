@@ -23,6 +23,13 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     private var matchStartTick = -1
     private var preFightGappleUsed = false
     private var lastBowThreatTick = -200
+    private var waterState = WaterState.IDLE
+    private var waterStateStartTick = 0
+
+    private enum class WaterState {
+        IDLE,
+        WAIT_TO_PICKUP
+    }
 
     override fun shouldExecute(): Boolean {
         if (matchStartTick == -1) {
@@ -55,6 +62,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     override fun onStart() {
         actionLockUntilTick = 0
+        waterState = WaterState.IDLE
     }
 
     private fun canStartAction(): Boolean {
@@ -199,18 +207,38 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val fakePlayer = clientInstance.fakePlayer
         val world = fakePlayer.world
 
-        val feet = world.getBlockAt(fakePlayer.x, fakePlayer.y, fakePlayer.z).id
-        val body = world.getBlockAt(fakePlayer.x, fakePlayer.y + 0.8, fakePlayer.z).id
-        return feet == Block.LAVA_FLOWING ||
-                feet == Block.LAVA_STILL ||
-                feet == Block.FIRE ||
-                body == Block.LAVA_FLOWING ||
-                body == Block.LAVA_STILL ||
-                body == Block.FIRE
+        val samples =
+                arrayOf(
+                        doubleArrayOf(0.0, 0.0),
+                        doubleArrayOf(0.28, 0.0),
+                        doubleArrayOf(-0.28, 0.0),
+                        doubleArrayOf(0.0, 0.28),
+                        doubleArrayOf(0.0, -0.28)
+                )
+
+        fun isHazard(id: Int): Boolean {
+            return id == Block.LAVA_FLOWING || id == Block.LAVA_STILL || id == Block.FIRE
+        }
+
+        for (offset in samples) {
+            val x = fakePlayer.x + offset[0]
+            val z = fakePlayer.z + offset[1]
+
+            val below = world.getBlockAt(x, fakePlayer.y - 1.0, z).id
+            val feet = world.getBlockAt(x, fakePlayer.y, z).id
+            val body = world.getBlockAt(x, fakePlayer.y + 0.7, z).id
+            val head = world.getBlockAt(x, fakePlayer.y + 1.2, z).id
+
+            if (isHazard(below) || isHazard(feet) || isHazard(body) || isHazard(head)) {
+                return true
+            }
+        }
+
+        return false
     }
 
     private fun needsEmergencyWater(): Boolean {
-        return isInDangerousBlock() && hasWater()
+        return hasWater() && (isInDangerousBlock() || waterState != WaterState.IDLE)
     }
 
     // Approximation: if enemy is medium/far and looking in our direction, treat as bow threat.
@@ -247,10 +275,47 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             val angles = computeOptimalYawAndPitch(clientInstance.fakePlayer, enemy)
             // Face enemy first, then force view to own front-ground so block places on ground ahead.
             setMouseYaw(angles[1])
-            setMousePitch(86f)
+            setMousePitch(68f)
             pressButton(180, MouseButton.Type.RIGHT_CLICK)
             lockAction(18)
         }
+        return true
+    }
+
+    private fun handleEmergencyWater(tick: Tick, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
+        val waterSlot = getWaterControlSlot()
+        if (waterSlot == -1) {
+            waterState = WaterState.IDLE
+            return false
+        }
+
+        tick.prerequisite("Water Control In Hotbar", waterSlot <= 8) {
+            moveItemToHotbar(waterSlot, inventory)
+        }
+        tick.prerequisite("Holding Water Control", inventory.heldSlot == resolveHotbarSlot(waterSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(waterSlot))
+        }
+
+        tick.execute {
+            setMousePitch(88f)
+
+            if (waterState == WaterState.IDLE) {
+                // Place water first.
+                pressButton(80, MouseButton.Type.RIGHT_CLICK)
+                waterState = WaterState.WAIT_TO_PICKUP
+                waterStateStartTick = clientInstance.currentTick
+                lockAction(8)
+                return@execute
+            }
+
+            // Wait ~0.3s (6 ticks) before trying to pick water back up.
+            if (clientInstance.currentTick - waterStateStartTick >= 6) {
+                pressButton(80, MouseButton.Type.RIGHT_CLICK)
+                waterState = WaterState.IDLE
+                lockAction(6)
+            }
+        }
+
         return true
     }
 
@@ -267,22 +332,10 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         keepForward()
 
         if (needsEmergencyWater()) {
-            val waterSlot = getWaterControlSlot()
-            if (waterSlot != -1) {
-                tick.prerequisite("Water Control In Hotbar", waterSlot <= 8) {
-                    moveItemToHotbar(waterSlot, inventory)
-                }
-                tick.prerequisite("Holding Water Control", inventory.heldSlot == resolveHotbarSlot(waterSlot)) {
-                    selectHotbarSlot(resolveHotbarSlot(waterSlot))
-                }
-                tick.execute {
-                    setMousePitch(88f)
-                    pressButton(25, MouseButton.Type.RIGHT_CLICK)
-                    lockAction(6)
-                    actionTaken = true
-                }
+            if (handleEmergencyWater(tick, inventory)) {
+                actionTaken = true
+                return
             }
-            if (actionTaken) return
         }
 
         if (enemy != null && isBowThreatActive() && canStartAction()) {
@@ -390,7 +443,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     override fun onEnd() {
         unpressButton(MouseButton.Type.RIGHT_CLICK)
-        heldUtilitySlot = -1
+        waterState = WaterState.IDLE
     }
 
     override fun onEvent(event: Event): Boolean {
