@@ -296,7 +296,15 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
     private fun attackTarget() {
         val fakePlayer = clientInstance.fakePlayer
-        nextClick = (timeMillis() + fakePlayer.random.nextGaussian(meanDelay.toDouble(), deviation.toDouble())).toLong()
+        nextClick =
+                (timeMillis() +
+                                fakePlayer.random.nextGaussian(
+                                        meanDelay.toDouble(),
+                                        deviation.toDouble()
+                                ))
+                        .toLong()
+
+        if (target == null) return
         pressButton(25, MouseButton.Type.LEFT_CLICK)
     }
 
@@ -472,8 +480,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             )
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == meleeWeaponSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (meleeWeaponSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(meleeWeaponSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
         }
 
         tick.execute {
@@ -517,9 +525,11 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         if (timeMillis() >= nextClick) attackTarget()
     }
 
+
     private fun applyHumanizedMovement() {
         val target = this.target ?: run {
-            strafe()
+            unpressKey(Key.Type.KEY_A, Key.Type.KEY_D, Key.Type.KEY_S)
+            pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
             return
         }
 
@@ -533,7 +543,47 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             return
         }
 
+        applyTerrainAwareMovement()
         strafe()
+    }
+
+    private fun applyTerrainAwareMovement() {
+        val fakePlayer = clientInstance.fakePlayer
+        val world = fakePlayer.world
+
+        val dir = vectorForRotation(0f, fakePlayer.yaw)
+        val nextX = fakePlayer.x + dir[0] * 0.75
+        val nextZ = fakePlayer.z + dir[2] * 0.75
+
+        val nextFeetBlock = world.getBlockAt(nextX, fakePlayer.y, nextZ).id
+        val nextHeadBlock = world.getBlockAt(nextX, fakePlayer.y + 1.0, nextZ).id
+        val groundAhead = world.getBlockAt(nextX, fakePlayer.y - 1.0, nextZ).id
+
+        val lavaAhead =
+                nextFeetBlock == Block.LAVA_FLOWING ||
+                        nextFeetBlock == Block.LAVA_STILL ||
+                        nextHeadBlock == Block.LAVA_FLOWING ||
+                        nextHeadBlock == Block.LAVA_STILL
+
+        if (lavaAhead) {
+            // Soft sidestep to avoid walking directly into lava.
+            unpressKey(100, Key.Type.KEY_W)
+            pressKey(100, Key.Type.KEY_A)
+            setMouseYaw(fakePlayer.yaw + 22f)
+            return
+        }
+
+        // Don't drop into holes blindly.
+        if (groundAhead == Block.AIR && fakePlayer.isOnGround) {
+            unpressKey(120, Key.Type.KEY_W)
+            pressKey(120, Key.Type.KEY_A)
+            return
+        }
+
+        // Auto-jump on small ledges / one-block highs.
+        if (nextFeetBlock != Block.AIR && nextHeadBlock == Block.AIR && fakePlayer.isOnGround) {
+            pressKey(100, Key.Type.KEY_SPACE)
+        }
     }
 
     private fun refreshHitWindow() {
