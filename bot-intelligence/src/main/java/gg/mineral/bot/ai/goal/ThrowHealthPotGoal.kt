@@ -535,7 +535,8 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             SearchInterval(-90.0, 90.0)
         )
 
-        return result.value.toFloat()
+        // NOTE: result.point is the pitch angle argument; result.value is only the objective score.
+        return result.point.toFloat()
     }
 
     private fun hasHitBlock(world: ClientWorld?, x: Double, y: Double, z: Double): Boolean {

@@ -528,21 +528,10 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     }
 
 
-    private fun searchForTarget() {
-        val fakePlayer = clientInstance.fakePlayer
-        if (clientInstance.currentTick - lastSearchTurnTick < 4) return
-
-        val step = fakePlayer.random.nextFloat() * 10f + 8f
-        setMouseYaw(fakePlayer.yaw + (step * searchTurnDirection))
-
-        if (clientInstance.currentTick % 25 == 0) searchTurnDirection *= -1
-        lastSearchTurnTick = clientInstance.currentTick
-    }
-
     private fun applyHumanizedMovement() {
         val target = this.target ?: run {
-            searchForTarget()
-            unpressKey(Key.Type.KEY_A, Key.Type.KEY_D)
+            unpressKey(Key.Type.KEY_A, Key.Type.KEY_D, Key.Type.KEY_S)
+            pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
             return
         }
 
