@@ -134,8 +134,8 @@ class SafeEatGoal(clientInstance: ClientInstance) :
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == foodSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (foodSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(foodSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(foodSlot))
         }
 
         tick.finishIf(

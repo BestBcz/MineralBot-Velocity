@@ -3,14 +3,14 @@ package gg.mineral.bot.ai.goal
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.event.Event
-import gg.mineral.bot.api.goal.Goal
+import gg.mineral.bot.ai.goal.type.InventoryGoal
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.item.Item
 import gg.mineral.bot.api.screen.type.ContainerScreen
 
-class DropEmptyBowlGoal(clientInstance: ClientInstance) : Goal(clientInstance), Sporadic, Timebound {
+class DropEmptyBowlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound {
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val maxDuration: Long = 100
@@ -107,8 +107,8 @@ class DropEmptyBowlGoal(clientInstance: ClientInstance) : Goal(clientInstance), 
             pressKey(Key.Type.KEY_ESCAPE)
         }
 
-        tick.prerequisite("Switch to Bowl Slot", inventory.heldSlot == bowlSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (bowlSlot + 1)))
+        tick.prerequisite("Switch to Bowl Slot", inventory.heldSlot == resolveHotbarSlot(bowlSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(bowlSlot))
         }
 
         tick.finishIf("Bowl is not in Hand", inventory.heldItemStack?.item?.id != Item.BOWL)

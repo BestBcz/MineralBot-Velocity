@@ -108,8 +108,8 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
         tick.prerequisite("In Hotbar", rodSlot <= 8) { moveItemToHotbar(rodSlot, inventory) }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == rodSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (rodSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(rodSlot))
         }
 
         tick.finishIf("Not Holding Rod", inventory.heldItemStack?.item?.id != Item.FISHING_ROD)

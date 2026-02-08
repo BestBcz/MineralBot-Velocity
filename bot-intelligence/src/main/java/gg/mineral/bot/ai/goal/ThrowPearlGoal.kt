@@ -166,8 +166,8 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
             )
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == pearlSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (pearlSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(pearlSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(pearlSlot))
         }
 
         tick.finishIf("Not Holding Valid Pearl", inventory.heldItemStack?.item?.id != Item.ENDER_PEARL)
