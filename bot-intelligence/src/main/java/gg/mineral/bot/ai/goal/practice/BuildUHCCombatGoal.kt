@@ -29,6 +29,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             matchStartTick = clientInstance.currentTick
         }
 
+        val fakePlayer = clientInstance.fakePlayer
+        val enemy = getClosestEnemy()
+
         if (needsEmergencyWater()) return true
         if (isBowThreatActive()) return hasBlocks()
 
@@ -41,8 +44,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             return true
         }
 
-        val enemy = getClosestEnemy() ?: return false
-        val fakePlayer = clientInstance.fakePlayer
+        enemy ?: return false
         val distance = fakePlayer.distance3DTo(enemy)
 
         if (needsGoldenHead()) return true
