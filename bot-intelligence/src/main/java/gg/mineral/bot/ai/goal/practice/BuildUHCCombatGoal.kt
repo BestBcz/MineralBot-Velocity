@@ -352,6 +352,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     override fun onEnd() {
         unpressButton(MouseButton.Type.RIGHT_CLICK)
+        heldUtilitySlot = -1
     }
 
     override fun onEvent(event: Event): Boolean {
@@ -361,6 +362,12 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     override fun onGameLoop() {
         if (clientInstance.currentTick > actionLockUntilTick + 8) {
             unpressButton(MouseButton.Type.RIGHT_CLICK)
+        }
+
+        // Prevent stale held-use from carrying forever into other goals.
+        if (heldUtilitySlot != -1 && clientInstance.currentTick > actionLockUntilTick + 10) {
+            unpressButton(MouseButton.Type.RIGHT_CLICK)
+            heldUtilitySlot = -1
         }
     }
 }
