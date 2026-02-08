@@ -124,7 +124,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
                 val dz = predictedZ - fakePlayer.z
                 val targetY =
                         if (enemy.isOnGround)
-                                enemy.y + 0.42
+                                enemy.y - 0.83
                         else enemy.y + enemy.eyeHeight * 0.62
                 val dy = targetY - (fakePlayer.y + fakePlayer.eyeHeight)
 
