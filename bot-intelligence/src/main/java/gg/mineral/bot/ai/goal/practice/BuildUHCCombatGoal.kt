@@ -364,6 +364,10 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                         return@execute
                     }
 
+                    if (!isAimAligned(fakePlayer.yaw, yaw, 10f)) {
+                        return@execute
+                    }
+
                     pressButton(50, MouseButton.Type.RIGHT_CLICK)
                     lastLavaPlaceTick = clientInstance.currentTick
                     lockAction(14)
@@ -379,6 +383,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     override fun onEnd() {
         unpressButton(MouseButton.Type.RIGHT_CLICK)
+        heldUtilitySlot = -1
     }
 
     override fun onEvent(event: Event): Boolean {
