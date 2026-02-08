@@ -122,12 +122,15 @@ abstract class Goal(protected val clientInstance: ClientInstance) : MathUtil {
 
     fun callTick() {
         logger.debug("callTick called of ${this.javaClass.simpleName}")
-        /*if (this is Timebound) {
-            if (timeMillis() - startTime >= maxDuration) {
+        if (this is Timebound && this is Sporadic) {
+            // maxDuration in this project is configured in tick units for most goals.
+            // Using wall-clock milliseconds causes short item-use goals (e.g. eating) to end too early.
+            if (tickCount >= maxDuration) {
+                logger.debug("Finished timebound goal: ${this.javaClass.simpleName}")
                 finish()
                 return
             }
-        }*/
+        }
         val tick = Tick(tickCount++, this)
         if (this is Suspendable && this is Sporadic) {
             if (!suspend) onTick(tick)
