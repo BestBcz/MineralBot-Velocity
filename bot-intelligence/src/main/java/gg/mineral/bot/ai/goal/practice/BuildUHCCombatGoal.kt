@@ -10,27 +10,19 @@ import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.item.Item
 import gg.mineral.bot.api.screen.type.ContainerScreen
+import gg.mineral.bot.api.world.block.Block
 
-/**
- * BuildUHC Combat Goal for strategic block/lava placement and golden apple usage.
- *
- * Key strategies:
- * - Use fishing rod for knockback and distance advantage
- * - Place lava to damage enemies
- * - Place blocks for defense/positioning
- * - Eat golden apple when low health
- * - Eat golden head (golden apple with durability 1) when critically low
- */
 class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound {
     override var executing: Boolean = false
     override var startTime: Long = 0
-    override val maxDuration: Long = 200
+    override val maxDuration: Long = 120
 
     private var lastLavaPlaceTick = 0
     private var actionLockUntilTick = 0
     private var matchStartTick = -1
     private var preFightGappleUsed = false
+    private var lastBowThreatTick = -200
 
     override fun shouldExecute(): Boolean {
         if (matchStartTick == -1) {
@@ -38,6 +30,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         }
 
         if (needsEmergencyWater()) return true
+        if (isBowThreatActive()) return hasBlocks()
 
         // BuildUHC opening: around 4s after spawn, pre-gap once then start full fight.
         if (!preFightGappleUsed && clientInstance.currentTick - matchStartTick >= 80 && hasNormalGapple()) {
@@ -48,7 +41,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val fakePlayer = clientInstance.fakePlayer
         val distance = fakePlayer.distance3DTo(enemy)
 
-        // Only interrupt melee when there is an actionable utility play.
         if (needsGoldenHead()) return true
         if (needsGoldenApple() && fakePlayer.health < 10) return true
 
@@ -97,11 +89,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     private fun hasBlocks(): Boolean {
         val inventory = clientInstance.fakePlayer.inventory
-        // Check for common building blocks
         for (i in 0..35) {
             val item = inventory.getItemStackAt(i) ?: continue
             val id = item.item.id
-            // Common building blocks: cobblestone (4), stone (1), dirt (3), planks (5), etc.
             if (id in 1..5 || id == 24 || id == 45 || id == 48 || id == 98) return true
         }
         return false
@@ -118,7 +108,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val inventory = fakePlayer.inventory
         if (fakePlayer.health > 6) return false
 
-        // Golden head is a golden apple with durability 1
         for (i in 0..35) {
             val item = inventory.getItemStackAt(i) ?: continue
             if (item.item.id == Item.GOLDEN_APPLE && item.durability == 1) return true
@@ -135,9 +124,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         var closestDistance = Double.MAX_VALUE
 
         for (entity in world.entities) {
-            if (entity is ClientPlayer &&
-                            !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid)
-            ) {
+            if (entity is ClientPlayer && !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid)) {
                 val distance = fakePlayer.distance3DTo(entity)
                 if (distance <= targetSearchRange && distance < closestDistance) {
                     closestDistance = distance
@@ -164,8 +151,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         for (i in 0..35) {
             val item = inventory.getItemStackAt(i) ?: continue
             if (item.item.id == Item.GOLDEN_APPLE) {
-                // Golden head has durability 1
                 if (preferHead && item.durability == 1) return i
+                if (!preferHead && item.durability == 0 && normalGapple == -1) normalGapple = i
                 if (normalGapple == -1) normalGapple = i
             }
         }
@@ -181,7 +168,16 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return -1
     }
 
-    /** Place lava when enemy is close and we have distance to escape. */
+    private fun getBlockSlot(): Int {
+        val inventory = clientInstance.fakePlayer.inventory
+        for (i in 0..35) {
+            val item = inventory.getItemStackAt(i) ?: continue
+            val id = item.item.id
+            if (id in 1..5 || id == 24 || id == 45 || id == 48 || id == 98) return i
+        }
+        return -1
+    }
+
     private fun shouldPlaceLava(): Boolean {
         if (clientInstance.currentTick - lastLavaPlaceTick < 100) return false
         if (!hasLava()) return false
@@ -190,7 +186,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val fakePlayer = clientInstance.fakePlayer
         val distance = fakePlayer.distance3DTo(enemy)
 
-        // Place lava when enemy is approaching (2-5 blocks)
         return distance >= 2.0 && distance <= 5.0 && fakePlayer.isOnGround
     }
 
@@ -200,16 +195,56 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
         val feet = world.getBlockAt(fakePlayer.x, fakePlayer.y, fakePlayer.z).id
         val body = world.getBlockAt(fakePlayer.x, fakePlayer.y + 0.8, fakePlayer.z).id
-        return feet == gg.mineral.bot.api.world.block.Block.LAVA_FLOWING ||
-                feet == gg.mineral.bot.api.world.block.Block.LAVA_STILL ||
-                feet == gg.mineral.bot.api.world.block.Block.FIRE ||
-                body == gg.mineral.bot.api.world.block.Block.LAVA_FLOWING ||
-                body == gg.mineral.bot.api.world.block.Block.LAVA_STILL ||
-                body == gg.mineral.bot.api.world.block.Block.FIRE
+        return feet == Block.LAVA_FLOWING ||
+                feet == Block.LAVA_STILL ||
+                feet == Block.FIRE ||
+                body == Block.LAVA_FLOWING ||
+                body == Block.LAVA_STILL ||
+                body == Block.FIRE
     }
 
     private fun needsEmergencyWater(): Boolean {
         return isInDangerousBlock() && hasWater()
+    }
+
+    // Approximation: if enemy aims closely at us from medium/far range, treat as bow threat.
+    private fun isBowThreatActive(): Boolean {
+        val enemy = getClosestEnemy() ?: return false
+        val fakePlayer = clientInstance.fakePlayer
+        val distance = fakePlayer.distance3DTo(enemy)
+        if (distance < 8.0) return false
+
+        val expected = computeOptimalYawAndPitch(enemy, fakePlayer)
+        val enemyYawDiff = kotlin.math.abs(angleDifference(enemy.yaw, expected[1]))
+        val enemyPitchDiff = kotlin.math.abs(angleDifference(enemy.pitch, expected[0]))
+
+        if (enemyYawDiff < 14f && enemyPitchDiff < 12f) {
+            lastBowThreatTick = clientInstance.currentTick
+        }
+
+        return clientInstance.currentTick - lastBowThreatTick <= 16
+    }
+
+    private fun handleBowDefense(tick: Tick, enemy: ClientPlayer, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
+        val blockSlot = getBlockSlot()
+        if (blockSlot == -1) return false
+
+        tick.prerequisite("Block In Hotbar", blockSlot <= 8) {
+            moveItemToHotbar(blockSlot, inventory)
+        }
+        tick.prerequisite("Holding Block", inventory.heldSlot == resolveHotbarSlot(blockSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(blockSlot))
+        }
+
+        tick.execute {
+            val angles = computeOptimalYawAndPitch(clientInstance.fakePlayer, enemy)
+            setMouseYaw(angles[1])
+            // place against feet-level in front to form quick wall segments
+            setMousePitch(70f)
+            pressButton(80, MouseButton.Type.RIGHT_CLICK)
+            lockAction(12)
+        }
+        return true
     }
 
     override fun onTick(tick: Tick) {
@@ -222,10 +257,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
 
-        // Let base melee keep control most ticks.
         keepForward()
 
-        // Priority 0: emergency extinguish / pickup
         if (needsEmergencyWater()) {
             val waterSlot = getWaterControlSlot()
             if (waterSlot != -1) {
@@ -242,6 +275,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                     actionTaken = true
                 }
             }
+            if (actionTaken) return
+        }
+
+        if (enemy != null && isBowThreatActive() && canStartAction()) {
+            if (handleBowDefense(tick, enemy, inventory)) return
         }
 
         if (!preFightGappleUsed && clientInstance.currentTick - matchStartTick >= 80 && hasNormalGapple()) {
@@ -257,12 +295,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                     pressButton(MouseButton.Type.RIGHT_CLICK)
                     preFightGappleUsed = true
                     lockAction(12)
-                    actionTaken = true
                 }
+                return
             }
         }
 
-        // Priority 1: Eat golden head if critically low
         if (needsGoldenHead()) {
             val headSlot = getGoldenAppleSlot(preferHead = true)
             if (headSlot != -1) {
@@ -276,13 +313,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                     pressButton(MouseButton.Type.RIGHT_CLICK)
                     keepForward()
                     lockAction(10)
-                    actionTaken = true
                 }
                 return
             }
         }
 
-        // Priority 2: Eat golden apple if low health
         if (needsGoldenApple() && fakePlayer.health < 10) {
             val gappleSlot = getGoldenAppleSlot()
             if (gappleSlot != -1) {
@@ -296,13 +331,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                     pressButton(MouseButton.Type.RIGHT_CLICK)
                     keepForward()
                     lockAction(10)
-                    actionTaken = true
                 }
                 return
             }
         }
 
-        // Priority 3: Place lava
         if (canStartAction() && shouldPlaceLava() && enemy != null) {
             val lavaSlot = getLavaSlot()
             if (lavaSlot != -1) {
@@ -313,7 +346,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                     selectHotbarSlot(resolveHotbarSlot(lavaSlot))
                 }
                 tick.execute {
-                    // Look at ground in front of enemy
                     val midX = (fakePlayer.x + enemy.x) / 2
                     val midZ = (fakePlayer.z + enemy.z) / 2
                     val x = midX - fakePlayer.x
@@ -326,7 +358,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                             yaw = (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
 
                     setMouseYaw(yaw)
-                    setMousePitch(45f) // Look down
+                    setMousePitch(45f)
+
+                    if (!isAimAligned(fakePlayer.yaw, yaw, 10f)) {
+                        return@execute
+                    }
 
                     if (!isAimAligned(fakePlayer.yaw, yaw, 10f)) {
                         return@execute
@@ -341,13 +377,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             }
         }
 
-        // If there is no utility action this tick, release right click so we don't get stuck.
         unpressButton(MouseButton.Type.RIGHT_CLICK)
-
-        // BuildUHC utility should be burst-like; give control back to melee quickly.
-        if (!actionTaken) {
-            finish()
-        }
+        if (!actionTaken) finish()
     }
 
     override fun onEnd() {
@@ -362,12 +393,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     override fun onGameLoop() {
         if (clientInstance.currentTick > actionLockUntilTick + 8) {
             unpressButton(MouseButton.Type.RIGHT_CLICK)
-        }
-
-        // Prevent stale held-use from carrying forever into other goals.
-        if (heldUtilitySlot != -1 && clientInstance.currentTick > actionLockUntilTick + 10) {
-            unpressButton(MouseButton.Type.RIGHT_CLICK)
-            heldUtilitySlot = -1
         }
     }
 }
