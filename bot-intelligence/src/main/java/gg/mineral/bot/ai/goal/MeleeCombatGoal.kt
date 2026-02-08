@@ -545,7 +545,47 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             return
         }
 
+        applyTerrainAwareMovement()
         strafe()
+    }
+
+    private fun applyTerrainAwareMovement() {
+        val fakePlayer = clientInstance.fakePlayer
+        val world = fakePlayer.world
+
+        val dir = vectorForRotation(0f, fakePlayer.yaw)
+        val nextX = fakePlayer.x + dir[0] * 0.75
+        val nextZ = fakePlayer.z + dir[2] * 0.75
+
+        val nextFeetBlock = world.getBlockAt(nextX, fakePlayer.y, nextZ).id
+        val nextHeadBlock = world.getBlockAt(nextX, fakePlayer.y + 1.0, nextZ).id
+        val groundAhead = world.getBlockAt(nextX, fakePlayer.y - 1.0, nextZ).id
+
+        val lavaAhead =
+                nextFeetBlock == Block.LAVA_FLOWING ||
+                        nextFeetBlock == Block.LAVA_STILL ||
+                        nextHeadBlock == Block.LAVA_FLOWING ||
+                        nextHeadBlock == Block.LAVA_STILL
+
+        if (lavaAhead) {
+            // Soft sidestep to avoid walking directly into lava.
+            unpressKey(100, Key.Type.KEY_W)
+            pressKey(100, Key.Type.KEY_A)
+            setMouseYaw(fakePlayer.yaw + 22f)
+            return
+        }
+
+        // Don't drop into holes blindly.
+        if (groundAhead == Block.AIR && fakePlayer.isOnGround) {
+            unpressKey(120, Key.Type.KEY_W)
+            pressKey(120, Key.Type.KEY_A)
+            return
+        }
+
+        // Auto-jump on small ledges / one-block highs.
+        if (nextFeetBlock != Block.AIR && nextHeadBlock == Block.AIR && fakePlayer.isOnGround) {
+            pressKey(100, Key.Type.KEY_SPACE)
+        }
     }
 
     private fun refreshHitWindow() {
