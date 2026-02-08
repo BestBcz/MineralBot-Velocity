@@ -296,7 +296,15 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
     private fun attackTarget() {
         val fakePlayer = clientInstance.fakePlayer
-        nextClick = (timeMillis() + fakePlayer.random.nextGaussian(meanDelay.toDouble(), deviation.toDouble())).toLong()
+        nextClick =
+                (timeMillis() +
+                                fakePlayer.random.nextGaussian(
+                                        meanDelay.toDouble(),
+                                        deviation.toDouble()
+                                ))
+                        .toLong()
+
+        if (target == null) return
         pressButton(25, MouseButton.Type.LEFT_CLICK)
     }
 
@@ -472,8 +480,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             )
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == meleeWeaponSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (meleeWeaponSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(meleeWeaponSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
         }
 
         tick.execute {
@@ -517,9 +525,11 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         if (timeMillis() >= nextClick) attackTarget()
     }
 
+
     private fun applyHumanizedMovement() {
         val target = this.target ?: run {
-            strafe()
+            unpressKey(Key.Type.KEY_A, Key.Type.KEY_D, Key.Type.KEY_S)
+            pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
             return
         }
 

@@ -77,8 +77,8 @@ class ReplaceArmorGoal(clientInstance: ClientInstance) : InventoryGoal(clientIns
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == armorSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (armorSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(armorSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(armorSlot))
         }
 
         tick.finishIf(
