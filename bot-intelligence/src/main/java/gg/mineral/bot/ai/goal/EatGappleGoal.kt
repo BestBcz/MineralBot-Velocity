@@ -130,8 +130,8 @@ class EatGappleGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstan
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == gappleSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (gappleSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(gappleSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(gappleSlot))
         }
 
         tick.finishIf("Not Holding Valid Gapple", inventory.heldItemStack?.item?.id != Item.GOLDEN_APPLE)

@@ -33,8 +33,16 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     private var rodInFlight = false
 
     override fun shouldExecute(): Boolean {
-        // Execute when we need to use items strategically
-        return hasRod() || hasLava() || hasBlocks() || needsGoldenApple()
+        val enemy = getClosestEnemy() ?: return false
+        val fakePlayer = clientInstance.fakePlayer
+        val distance = fakePlayer.distance3DTo(enemy)
+
+        // Only interrupt melee when there is an actionable utility play.
+        if (needsGoldenHead()) return true
+        if (needsGoldenApple() && fakePlayer.health < 10) return true
+
+        return (hasRod() && distance in 4.0..10.0) ||
+                (hasLava() && distance in 2.0..5.0 && fakePlayer.isOnGround)
     }
 
     override fun onStart() {
@@ -179,8 +187,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.prerequisite("Head In Hotbar", headSlot <= 8) {
                     moveItemToHotbar(headSlot, inventory)
                 }
-                tick.prerequisite("Holding Head", inventory.heldSlot == headSlot) {
-                    pressKey(10, Key.Type.valueOf("KEY_" + (headSlot + 1)))
+                tick.prerequisite("Holding Head", inventory.heldSlot == resolveHotbarSlot(headSlot)) {
+                    selectHotbarSlot(resolveHotbarSlot(headSlot))
                 }
                 tick.execute {
                     pressButton(MouseButton.Type.RIGHT_CLICK)
@@ -197,8 +205,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.prerequisite("Gapple In Hotbar", gappleSlot <= 8) {
                     moveItemToHotbar(gappleSlot, inventory)
                 }
-                tick.prerequisite("Holding Gapple", inventory.heldSlot == gappleSlot) {
-                    pressKey(10, Key.Type.valueOf("KEY_" + (gappleSlot + 1)))
+                tick.prerequisite("Holding Gapple", inventory.heldSlot == resolveHotbarSlot(gappleSlot)) {
+                    selectHotbarSlot(resolveHotbarSlot(gappleSlot))
                 }
                 tick.execute {
                     pressButton(MouseButton.Type.RIGHT_CLICK)
@@ -215,8 +223,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.prerequisite("Rod In Hotbar", rodSlot <= 8) {
                     moveItemToHotbar(rodSlot, inventory)
                 }
-                tick.prerequisite("Holding Rod", inventory.heldSlot == rodSlot) {
-                    pressKey(10, Key.Type.valueOf("KEY_" + (rodSlot + 1)))
+                tick.prerequisite("Holding Rod", inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
+                    selectHotbarSlot(resolveHotbarSlot(rodSlot))
                 }
                 tick.execute {
                     // Aim at enemy
@@ -238,8 +246,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.prerequisite("Lava In Hotbar", lavaSlot <= 8) {
                     moveItemToHotbar(lavaSlot, inventory)
                 }
-                tick.prerequisite("Holding Lava", inventory.heldSlot == lavaSlot) {
-                    pressKey(10, Key.Type.valueOf("KEY_" + (lavaSlot + 1)))
+                tick.prerequisite("Holding Lava", inventory.heldSlot == resolveHotbarSlot(lavaSlot)) {
+                    selectHotbarSlot(resolveHotbarSlot(lavaSlot))
                 }
                 tick.execute {
                     // Look at ground in front of enemy
@@ -277,7 +285,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (rodInFlight && clientInstance.currentTick - lastRodUseTick > 20) {
             val rodSlot = getRodSlot()
             val inventory = clientInstance.fakePlayer.inventory
-            if (rodSlot != -1 && inventory.heldSlot == rodSlot) {
+            if (rodSlot != -1 && inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
                 pressButton(25, MouseButton.Type.RIGHT_CLICK)
                 rodInFlight = false
             }

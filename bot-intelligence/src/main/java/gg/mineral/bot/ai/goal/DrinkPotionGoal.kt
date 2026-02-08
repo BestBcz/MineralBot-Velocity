@@ -136,8 +136,8 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             clientInstance.currentScreen !is ContainerScreen
         ) { pressKey(10, Key.Type.KEY_ESCAPE) }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == potionSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (potionSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(potionSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(potionSlot))
         }
 
         tick.finishIf("Not Holding Valid Potion", inventory.heldItemStack?.let { isValidPotion(it) } == false)
