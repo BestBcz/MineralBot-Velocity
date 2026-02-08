@@ -153,8 +153,8 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             )
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == debuffSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (debuffSlot + 1)))
+        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(debuffSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(debuffSlot))
         }
 
         tick.finishIf("Not Holding Valid Potion", inventory.heldItemStack?.let { itemStack ->

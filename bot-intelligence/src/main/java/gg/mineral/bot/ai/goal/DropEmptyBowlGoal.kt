@@ -107,8 +107,8 @@ class DropEmptyBowlGoal(clientInstance: ClientInstance) : Goal(clientInstance), 
             pressKey(Key.Type.KEY_ESCAPE)
         }
 
-        tick.prerequisite("Switch to Bowl Slot", inventory.heldSlot == bowlSlot) {
-            pressKey(10, Key.Type.valueOf("KEY_" + (bowlSlot + 1)))
+        tick.prerequisite("Switch to Bowl Slot", inventory.heldSlot == resolveHotbarSlot(bowlSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(bowlSlot))
         }
 
         tick.finishIf("Bowl is not in Hand", inventory.heldItemStack?.item?.id != Item.BOWL)
