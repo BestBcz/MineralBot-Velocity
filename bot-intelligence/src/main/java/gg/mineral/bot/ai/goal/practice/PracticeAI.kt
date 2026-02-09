@@ -48,6 +48,7 @@ object PracticeAI {
             normalizedKit.contains("classic") || normalizedKit.contains("archer") ->
                     getClassicGoals(clientInstance)
             normalizedKit.contains("spleef") -> getSpleefGoals(clientInstance)
+            normalizedKit.contains("diamond") -> getDiamondGoals(clientInstance)
             else -> getDefaultGoals(clientInstance)
         }
     }
@@ -101,6 +102,16 @@ object PracticeAI {
                 BuildUHCCombatGoal(clientInstance), // Lava, blocks, etc.
                 SafeEatGoal(clientInstance),
                 MeleeCombatGoal(clientInstance)
+        )
+    }
+
+    private fun getDiamondGoals(clientInstance: ClientInstance): Array<Goal> {
+        return arrayOf(
+            SelectKitGoal(clientInstance),
+            EatGappleGoal(clientInstance), // Eat gapple for regen
+            FishingRodGoal(clientInstance), // Rod for knockback
+            SafeEatGoal(clientInstance),
+            MeleeCombatGoal(clientInstance)
         )
     }
 
