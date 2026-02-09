@@ -25,6 +25,8 @@ import net.minecraft.util.IChatComponent;
 
 public class VelocityBotManager {
 
+    private static final String BOT_NAME_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
     private final Object plugin;
     private final ProxyServer server;
     private final Logger logger;
@@ -341,17 +343,8 @@ public class VelocityBotManager {
                 BotConfiguration config = new BotConfiguration();
                 UUID botUUID = UUID.randomUUID();
 
-                // Name System: Base name + Kit + (Optional) Random identifier on retry
-                String botUsername = "Bot_" + kitType;
+                String botUsername = generateUniqueBotUsername(kitType);
                 if (retryCount > 0) {
-                    // Add random characters to bypass frequent connection limits
-                    String chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-                    StringBuilder sb = new StringBuilder();
-                    Random random = new Random();
-                    for (int i = 0; i < 4; i++) {
-                        sb.append(chars.charAt(random.nextInt(chars.length())));
-                    }
-                    botUsername = botUsername + "_" + sb.toString();
                     logger.info("Retrying with new bot name: {} (Retry #{})", botUsername, retryCount);
                 }
 
@@ -475,6 +468,23 @@ public class VelocityBotManager {
                 logger.error("Failed to start bot", e);
             }
         }).schedule();
+    }
+
+    private String generateUniqueBotUsername(String kitType) {
+        String username;
+        do {
+            username = "BOT_" + kitType + generateRandomSuffix(3);
+        } while (botsByUsername.containsKey(username));
+        return username;
+    }
+
+    private String generateRandomSuffix(int length) {
+        StringBuilder sb = new StringBuilder(length);
+        Random random = new Random();
+        for (int i = 0; i < length; i++) {
+            sb.append(BOT_NAME_CHARS.charAt(random.nextInt(BOT_NAME_CHARS.length())));
+        }
+        return sb.toString();
     }
 
     @Subscribe
