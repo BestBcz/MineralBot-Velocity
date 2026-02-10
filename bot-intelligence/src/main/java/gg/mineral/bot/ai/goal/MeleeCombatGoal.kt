@@ -575,6 +575,39 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             return
         }
 
+        val frontBlocked = nextFeetBlock != Block.AIR && nextHeadBlock != Block.AIR
+        if (frontBlocked) {
+            // Try to route around obstacle instead of face-tanking into it.
+            val leftDir = vectorForRotation(0f, fakePlayer.yaw - 35f)
+            val rightDir = vectorForRotation(0f, fakePlayer.yaw + 35f)
+
+            fun sideScore(side: DoubleArray): Int {
+                val sx = fakePlayer.x + side[0] * 0.95
+                val sz = fakePlayer.z + side[2] * 0.95
+                val feet = world.getBlockAt(sx, fakePlayer.y, sz).id
+                val head = world.getBlockAt(sx, fakePlayer.y + 1.0, sz).id
+                val ground = world.getBlockAt(sx, fakePlayer.y - 1.0, sz).id
+                var score = 0
+                if (feet == Block.AIR) score += 2
+                if (head == Block.AIR) score += 2
+                if (ground != Block.AIR) score += 1
+                return score
+            }
+
+            val leftScore = sideScore(leftDir)
+            val rightScore = sideScore(rightDir)
+            if (leftScore >= rightScore) {
+                pressKey(110, Key.Type.KEY_A)
+                unpressKey(110, Key.Type.KEY_D)
+                setMouseYaw(fakePlayer.yaw - 18f)
+            } else {
+                pressKey(110, Key.Type.KEY_D)
+                unpressKey(110, Key.Type.KEY_A)
+                setMouseYaw(fakePlayer.yaw + 18f)
+            }
+            return
+        }
+
         // Don't drop into holes blindly.
         if (groundAhead == Block.AIR && fakePlayer.isOnGround) {
             unpressKey(120, Key.Type.KEY_W)
@@ -582,8 +615,10 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             return
         }
 
-        // Auto-jump on small ledges / one-block highs.
-        if (nextFeetBlock != Block.AIR && nextHeadBlock == Block.AIR && fakePlayer.isOnGround) {
+        val lowProfileStep = nextFeetBlock == Block.CARPET || nextFeetBlock == Block.SNOW_LAYER
+
+        // Auto-jump on small ledges / one-block highs, but not on carpet/snow-layer micro-steps.
+        if (!lowProfileStep && nextFeetBlock != Block.AIR && nextHeadBlock == Block.AIR && fakePlayer.isOnGround) {
             pressKey(100, Key.Type.KEY_SPACE)
         }
     }

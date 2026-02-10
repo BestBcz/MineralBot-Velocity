@@ -16,7 +16,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound {
     override var executing: Boolean = false
     override var startTime: Long = 0
-    override val maxDuration: Long = 120
+    override val maxDuration: Long = 70
 
     private var lastLavaPlaceTick = 0
     private var actionLockUntilTick = 0
@@ -25,6 +25,13 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     private var lastBowThreatTick = -200
     private var waterState = WaterState.IDLE
     private var waterStateStartTick = 0
+    private var lastGappleEatTick = -200
+    private var lastHeadEatTick = -200
+    private var placedLavaTick = -200
+    private var placedWaterTick = -200
+    private var placedLavaX = Double.NaN
+    private var placedLavaY = Double.NaN
+    private var placedLavaZ = Double.NaN
 
     private enum class WaterState {
         IDLE,
@@ -54,10 +61,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         enemy ?: return false
         val distance = fakePlayer.distance3DTo(enemy)
 
-        if (needsGoldenHead()) return true
-        if (needsGoldenApple() && fakePlayer.health < 10) return true
+        if (needsGoldenHead() && canEatHeadNow(fakePlayer.health)) return true
+        if (needsGoldenApple() && fakePlayer.health < 10 && canEatGappleNow(fakePlayer.health)) return true
+        if (shouldRecoverPlacedFluid()) return true
 
-        return hasLava() && distance in 2.0..5.0 && fakePlayer.isOnGround
+        return hasLava() && distance in 1.9..5.3 && fakePlayer.isOnGround && !allBucketsEmpty()
     }
 
     override fun onStart() {
@@ -200,7 +208,24 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val fakePlayer = clientInstance.fakePlayer
         val distance = fakePlayer.distance3DTo(enemy)
 
-        return distance >= 2.0 && distance <= 5.0 && fakePlayer.isOnGround
+        return distance >= 1.9 && distance <= 5.3 && fakePlayer.isOnGround && !allBucketsEmpty()
+    }
+
+    private fun allBucketsEmpty(): Boolean {
+        val inventory = clientInstance.fakePlayer.inventory
+        var bucketCount = 0
+        var filledBuckets = 0
+        for (i in 0..35) {
+            val item = inventory.getItemStackAt(i) ?: continue
+            when (item.item.id) {
+                Item.BUCKET -> bucketCount++
+                Item.WATER_BUCKET, Item.LAVA_BUCKET -> {
+                    bucketCount++
+                    filledBuckets++
+                }
+            }
+        }
+        return bucketCount >= 4 && filledBuckets == 0
     }
 
     private fun isInDangerousBlock(): Boolean {
@@ -238,7 +263,103 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     }
 
     private fun needsEmergencyWater(): Boolean {
+        if (allBucketsEmpty()) return false
         return hasWater() && (isInDangerousBlock() || waterState != WaterState.IDLE)
+    }
+
+    private fun canEatGappleNow(health: Float): Boolean {
+        if (health <= 3.0f) return true
+        return clientInstance.currentTick - lastGappleEatTick >= 100
+    }
+
+    private fun canEatHeadNow(health: Float): Boolean {
+        if (health <= 2.5f) return true
+        return clientInstance.currentTick - lastHeadEatTick >= 200
+    }
+
+    private fun isSafeToEat(enemy: ClientPlayer?): Boolean {
+        val fakePlayer = clientInstance.fakePlayer
+        if (enemy == null) return true
+        if (fakePlayer.health <= 2.5f) return true
+        return fakePlayer.distance3DTo(enemy) >= 4.4
+    }
+
+    private fun getRodSlot(): Int {
+        val inventory = clientInstance.fakePlayer.inventory
+        for (i in 0..35) {
+            val item = inventory.getItemStackAt(i) ?: continue
+            if (item.item.id == Item.FISHING_ROD) return i
+        }
+        return -1
+    }
+
+    private fun tryCreateEatWindow(tick: Tick, enemy: ClientPlayer, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
+        val rodSlot = getRodSlot()
+        if (rodSlot == -1) return false
+
+        tick.prerequisite("Rod In Hotbar", rodSlot <= 8) { moveItemToHotbar(rodSlot, inventory) }
+        tick.prerequisite("Holding Rod", inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(rodSlot))
+        }
+
+        tick.execute {
+            val angles = computeOptimalYawAndPitch(clientInstance.fakePlayer, enemy)
+            setMouseYaw(angles[1])
+            setMousePitch((angles[0] + 8f).coerceIn(-12f, 42f))
+            pressButton(35, MouseButton.Type.RIGHT_CLICK)
+            lockAction(7)
+        }
+        return true
+    }
+
+    private fun hasNearbyRecoverableFluid(radius: Double = 2.6): Boolean {
+        val fakePlayer = clientInstance.fakePlayer
+        val world = fakePlayer.world
+
+        for (x in -2..2) {
+            for (y in -1..1) {
+                for (z in -2..2) {
+                    val bx = fakePlayer.x + x
+                    val by = fakePlayer.y + y
+                    val bz = fakePlayer.z + z
+                    val id = world.getBlockAt(bx, by, bz).id
+                    if (id != Block.WATER_FLOWING && id != Block.WATER_STILL && id != Block.LAVA_FLOWING && id != Block.LAVA_STILL) continue
+                    val dist = sqrt((bx - fakePlayer.x) * (bx - fakePlayer.x) + (bz - fakePlayer.z) * (bz - fakePlayer.z))
+                    if (dist <= radius) return true
+                }
+            }
+        }
+
+        if (!placedLavaX.isNaN()) {
+            val id = world.getBlockAt(placedLavaX, placedLavaY, placedLavaZ).id
+            if (id == Block.LAVA_FLOWING || id == Block.LAVA_STILL) return true
+        }
+
+        return false
+    }
+
+    private fun shouldRecoverPlacedFluid(): Boolean {
+        val now = clientInstance.currentTick
+        if (!clientInstance.fakePlayer.inventory.contains(Item.BUCKET)) return false
+        if (now - placedLavaTick < 80 && now - placedWaterTick < 80) return false
+        return hasNearbyRecoverableFluid()
+    }
+
+    private fun tryRecoverFluid(tick: Tick, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
+        val bucketSlot = getWaterControlSlot()
+        if (bucketSlot == -1) return false
+
+        tick.prerequisite("Bucket In Hotbar", bucketSlot <= 8) { moveItemToHotbar(bucketSlot, inventory) }
+        tick.prerequisite("Holding Bucket", inventory.heldSlot == resolveHotbarSlot(bucketSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(bucketSlot))
+        }
+
+        tick.execute {
+            setMousePitch(86f)
+            pressButton(70, MouseButton.Type.RIGHT_CLICK)
+            lockAction(6)
+        }
+        return true
     }
 
     // Approximation: if enemy is medium/far and looking in our direction, treat as bow threat.
@@ -304,6 +425,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 pressButton(80, MouseButton.Type.RIGHT_CLICK)
                 waterState = WaterState.WAIT_TO_PICKUP
                 waterStateStartTick = clientInstance.currentTick
+                placedWaterTick = clientInstance.currentTick
                 lockAction(8)
                 return@execute
             }
@@ -338,6 +460,10 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             }
         }
 
+        if (canStartAction() && shouldRecoverPlacedFluid()) {
+            if (tryRecoverFluid(tick, inventory)) return
+        }
+
         if (enemy != null && isBowThreatActive() && canStartAction()) {
             if (handleBowDefense(tick, enemy, inventory)) return
         }
@@ -364,7 +490,10 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             }
         }
 
-        if (needsGoldenHead()) {
+        if (needsGoldenHead() && canEatHeadNow(fakePlayer.health)) {
+            if (!isSafeToEat(enemy)) {
+                if (enemy != null && tryCreateEatWindow(tick, enemy, inventory)) return
+            }
             val headSlot = getGoldenAppleSlot(preferHead = true)
             if (headSlot != -1) {
                 tick.prerequisite("Head In Hotbar", headSlot <= 8) {
@@ -377,12 +506,16 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                     pressButton(MouseButton.Type.RIGHT_CLICK)
                     keepForward()
                     lockAction(10)
+                    lastHeadEatTick = clientInstance.currentTick
                 }
                 return
             }
         }
 
-        if (needsGoldenApple() && fakePlayer.health < 10) {
+        if (needsGoldenApple() && fakePlayer.health < 10 && canEatGappleNow(fakePlayer.health)) {
+            if (!isSafeToEat(enemy)) {
+                if (enemy != null && tryCreateEatWindow(tick, enemy, inventory)) return
+            }
             val gappleSlot = getGoldenAppleSlot()
             if (gappleSlot != -1) {
                 tick.prerequisite("Gapple In Hotbar", gappleSlot <= 8) {
@@ -395,6 +528,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                     pressButton(MouseButton.Type.RIGHT_CLICK)
                     keepForward()
                     lockAction(10)
+                    lastGappleEatTick = clientInstance.currentTick
                 }
                 return
             }
@@ -430,6 +564,10 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
                     pressButton(50, MouseButton.Type.RIGHT_CLICK)
                     lastLavaPlaceTick = clientInstance.currentTick
+                    placedLavaTick = clientInstance.currentTick
+                    placedLavaX = midX
+                    placedLavaY = fakePlayer.y - 1.0
+                    placedLavaZ = midZ
                     lockAction(14)
                     actionTaken = true
                 }
