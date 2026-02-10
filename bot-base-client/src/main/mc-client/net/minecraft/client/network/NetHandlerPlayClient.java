@@ -1518,6 +1518,11 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
      * update an objectives' displayname
      */
     public void handleScoreboardObjective(S3BPacketScoreboardObjective p_147291_1_) {
+        if (this.clientWorldController == null) {
+            logger.debug("Ignoring scoreboard objective packet before world initialization");
+            return;
+        }
+
         Scoreboard var2 = this.clientWorldController.getScoreboard();
         ScoreObjective var3;
 
@@ -1540,6 +1545,11 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
      * objective
      */
     public void handleUpdateScore(S3CPacketUpdateScore p_147250_1_) {
+        if (this.clientWorldController == null) {
+            logger.debug("Ignoring update score packet before world initialization");
+            return;
+        }
+
         Scoreboard var2 = this.clientWorldController.getScoreboard();
         ScoreObjective var3 = var2.getObjective(p_147250_1_.func_149321_d());
 
@@ -1557,6 +1567,11 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
      * name)
      */
     public void handleDisplayScoreboard(S3DPacketDisplayScoreboard p_147254_1_) {
+        if (this.clientWorldController == null) {
+            logger.debug("Ignoring display scoreboard packet before world initialization");
+            return;
+        }
+
         Scoreboard var2 = this.clientWorldController.getScoreboard();
 
         if (p_147254_1_.func_149370_d().length() == 0) {
@@ -1574,6 +1589,11 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
      * is enabled
      */
     public void handleTeams(S3EPacketTeams p_147247_1_) {
+        if (this.clientWorldController == null) {
+            logger.debug("Ignoring team packet before world initialization");
+            return;
+        }
+
         Scoreboard var2 = this.clientWorldController.getScoreboard();
         ScorePlayerTeam var3;
 
