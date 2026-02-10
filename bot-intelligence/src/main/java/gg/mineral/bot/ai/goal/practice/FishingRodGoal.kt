@@ -23,7 +23,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound {
     override var executing: Boolean = false
     override var startTime: Long = 0
-    override val maxDuration: Long = 50
+    override val maxDuration: Long = 36
 
     private var lastRodTick = 0
     private var rodState = RodState.IDLE
@@ -36,8 +36,8 @@ class FishingRodGoal(clientInstance: ClientInstance) :
     }
 
     override fun shouldExecute(): Boolean {
-        // Rod cooldown (about 2 seconds)
-        if (clientInstance.currentTick - lastRodTick < 24) return false
+        // Rod cooldown: shorter so bot uses rod more aggressively.
+        if (clientInstance.currentTick - lastRodTick < 14) return false
 
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
@@ -47,9 +47,8 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         val enemy = getClosestEnemy() ?: return false
         val distance = fakePlayer.distance3DTo(enemy)
 
-        // Use rod when enemy is at optimal distance (4-10 blocks)
-        // or when enemy is approaching rapidly
-        return distance >= 4.0 && distance <= 12.0
+        // Use rod more often to create/deny spacing before melee re-engage.
+        return distance >= 2.8 && distance <= 11.5
     }
 
     override fun onStart() {
@@ -161,7 +160,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
             RodState.IN_FLIGHT -> {
                 // Wait for hook to travel
                 tick.execute {
-                    if (tickCount > 15) { // About 750ms flight time
+                    if (tickCount > 9) { // Faster reel for snappier rod cycles
                         rodState = RodState.REELING
                     }
                 }
