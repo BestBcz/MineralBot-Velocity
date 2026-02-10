@@ -248,8 +248,8 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
             setMousePitch(it[1])
         }*/
 
-        // Temporary implementation
-        val angles = getAngles(fakePlayer, entity)
+        // Aim pearl to land near enemy feet instead of face/chest level.
+        val angles = getAnglesToFeet(fakePlayer, entity)
         setMouseYaw(angles[0])
         setMousePitch(angles[1])
 
@@ -276,26 +276,30 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     override fun onEnd() {
     }
 
-    private fun getAngles(player: ClientPlayer, entity: ClientPlayer): FloatArray {
-        val xDelta: Double = (entity.x - entity.lastX) * 0.4
-        val zDelta: Double = (entity.z - entity.lastZ) * 0.4
-        var d: Double = player.distance3DTo(entity)
-        d -= d % 0.8
-        val xMulti: Double
-        val zMulti: Double
-        val sprint = entity.isSprinting
-        xMulti = d / 0.8 * xDelta * (if (sprint) 1.25 else 1.0)
-        zMulti = d / 0.8 * zDelta * (if (sprint) 1.25 else 1.0)
-        val x: Double = entity.x + xMulti - player.x
-        val z: Double = entity.z + zMulti - player.z
-        val y: Double = (player.y + player.eyeHeight
-                - (entity.y + entity.eyeHeight))
-        val dist: Double = player.distance3DTo(entity)
-        val yaw = Math.toDegrees(atan2(z, x)).toFloat() - 90.0f
-        val d1: Double = sqrt(x * x + z * z)
-        val pitch = -(atan2(y, d1) * 180.0 / Math.PI).toFloat() + dist.toFloat() * 0.11f
+    private fun getAnglesToFeet(player: ClientPlayer, entity: ClientPlayer): FloatArray {
+        val xDelta = (entity.x - entity.lastX) * 0.25
+        val zDelta = (entity.z - entity.lastZ) * 0.25
+        val horizontalDistance = player.distance2DTo(entity.x, entity.z)
+        val leadScale = (horizontalDistance / 4.0).coerceIn(0.5, 1.8)
 
-        return floatArrayOf(yaw, -pitch)
+        val predictedX = entity.x + xDelta * leadScale
+        val predictedZ = entity.z + zDelta * leadScale
+
+        val x = predictedX - player.x
+        val z = predictedZ - player.z
+
+        // Intentionally bias the target to the feet area to avoid over-shooting behind moving targets.
+        val feetY = entity.y + 0.05
+        val y = feetY - (player.y + player.eyeHeight)
+
+        val yaw = Math.toDegrees(atan2(z, x)).toFloat() - 90.0f
+        val d1 = sqrt(x * x + z * z)
+        val basePitch = Math.toDegrees(atan2(y, d1)).toFloat()
+
+        // Add extra downward bias so pearls are thrown at/under feet rather than face.
+        val pitch = (basePitch + 12.0f).coerceIn(-89f, 89f)
+
+        return floatArrayOf(yaw, pitch)
     }
 
     private fun minimizePitch(

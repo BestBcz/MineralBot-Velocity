@@ -9,6 +9,7 @@ import gg.mineral.bot.api.entity.living.player.FakePlayer
 import gg.mineral.bot.api.entity.throwable.ClientPotion
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.event.entity.EntityDestroyEvent
+import gg.mineral.bot.api.event.entity.EntityHurtEvent
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
@@ -50,6 +51,10 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     private var thrownPotionId: Int? = null
     private var potionLandingX: Double = 0.0
     private var potionLandingZ: Double = 0.0
+    private var healthBeforeThrow: Float = 0f
+    private var maxHealthAfterThrow: Float = 0f
+    private var splashApplied: Boolean = false
+    private var damagedAfterThrow: Boolean = false
 
     override fun shouldExecute(): Boolean {
         // Cooldown between throws
@@ -79,6 +84,10 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         currentState = PotState.PREPARING
         stateStartTick = clientInstance.currentTick
         thrownPotionId = null
+        healthBeforeThrow = clientInstance.fakePlayer.health
+        maxHealthAfterThrow = healthBeforeThrow
+        splashApplied = false
+        damagedAfterThrow = false
         // Move forward by default
         pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
         unpressKey(Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
@@ -266,6 +275,10 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
 
         if (nearbyPotion != null) {
             thrownPotionId = nearbyPotion.entityId
+            healthBeforeThrow = fakePlayer.health
+            maxHealthAfterThrow = fakePlayer.health
+            splashApplied = false
+            damagedAfterThrow = false
             transitionTo(PotState.TRACKING)
         } else if (clientInstance.currentTick - stateStartTick > 10) {
             // Couldn't find thrown potion after 10 ticks, assume it failed
@@ -274,6 +287,23 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     }
 
     private fun handleTracking(tick: Tick, fakePlayer: FakePlayer) {
+        maxHealthAfterThrow = kotlin.math.max(maxHealthAfterThrow, fakePlayer.health)
+        if (!splashApplied && maxHealthAfterThrow > healthBeforeThrow + 0.05f) {
+            splashApplied = true
+        }
+
+        // Only enforce strict turn-away/turn-back behavior when there is no interference.
+        if (!damagedAfterThrow) {
+            if (splashApplied) {
+                setMouseYaw(angleTowardsEnemies())
+                transitionTo(PotState.COOLDOWN)
+                return
+            }
+
+            // Keep running away until we confirm the potion has healed us.
+            setMouseYaw(angleAwayFromEnemies())
+        }
+
         // Track the thrown potion if we can find it
         thrownPotionId?.let { potionId ->
             val world = fakePlayer.world
@@ -299,19 +329,22 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
                     potionLandingZ = trajectory.z
                 }
 
-                // Look at the predicted landing position
-                val x = potionLandingX - fakePlayer.x
-                val z = potionLandingZ - fakePlayer.z
+                // If we got interfered (e.g. got hit), don't force away/back logic.
+                // Fall back to dynamic tracking based on potion landing.
+                if (damagedAfterThrow) {
+                    val x = potionLandingX - fakePlayer.x
+                    val z = potionLandingZ - fakePlayer.z
 
-                val yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat().let {
-                    when {
-                        z < 0.0 && x < 0.0 -> (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-                        z < 0.0 && x > 0.0 -> (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-                        else -> it
+                    val yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat().let {
+                        when {
+                            z < 0.0 && x < 0.0 -> (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
+                            z < 0.0 && x > 0.0 -> (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
+                            else -> it
+                        }
                     }
-                }
 
-                setMouseYaw(yaw)
+                    setMouseYaw(yaw)
+                }
             } else {
                 // Potion disappeared, move to cooldown
                 transitionTo(PotState.COOLDOWN)
@@ -359,6 +392,11 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
 
     override fun onEvent(event: Event): Boolean {
         when (event) {
+            is EntityHurtEvent -> {
+                if (currentState == PotState.TRACKING && event.attackedEntity.uuid == clientInstance.fakePlayer.uuid) {
+                    damagedAfterThrow = true
+                }
+            }
             is EntityDestroyEvent -> {
                 // If we're tracking a potion and it gets destroyed, move to cooldown
                 if (currentState == PotState.TRACKING &&
@@ -408,6 +446,26 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         if (z < 0.0 && x < 0.0) yaw = (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
         else if (z < 0.0 && x > 0.0) yaw = (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
         return yaw + 180.0f
+    }
+
+    private fun angleTowardsEnemies(): Float {
+        val fakePlayer = clientInstance.fakePlayer
+        val world = fakePlayer.world
+
+        val enemy = world.entities
+            .minByOrNull {
+                if (it is ClientLivingEntity && !clientInstance.configuration.friendlyUUIDs.contains(it.uuid))
+                    it.distance3DTo(fakePlayer)
+                else Double.MAX_VALUE
+            } ?: return fakePlayer.yaw
+
+        val x: Double = enemy.x - fakePlayer.x
+        val z: Double = enemy.z - fakePlayer.z
+
+        var yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat()
+        if (z < 0.0 && x < 0.0) yaw = (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
+        else if (z < 0.0 && x > 0.0) yaw = (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
+        return yaw
     }
 
     private fun distanceAwayFromEnemies(): Double {
