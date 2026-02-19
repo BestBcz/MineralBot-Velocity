@@ -540,21 +540,9 @@ public abstract class ServerConfigurationManager {
             this.playerPingIndex = 0;
         }
 
-        if (this.playerPingIndex % 20 == 0) {
-            for (int var1 = 0; var1 < this.playerEntityList.size(); ++var1) {
-                EntityPlayerMP var2 = (EntityPlayerMP) this.playerEntityList.get(var1);
-
-                for (int var3 = 0; var3 < this.playerEntityList.size(); ++var3) {
-                    EntityPlayerMP var4 = (EntityPlayerMP) this.playerEntityList.get(var3);
-                    var2.playerNetServerHandler
-                            .sendPacket(new S38PacketPlayerListItem(var4.getCommandSenderName(), true, var4.ping));
-                }
-            }
-        }
-
         if (this.playerPingIndex < this.playerEntityList.size()) {
-            EntityPlayerMP var5 = (EntityPlayerMP) this.playerEntityList.get(this.playerPingIndex);
-            this.func_148540_a(new S38PacketPlayerListItem(var5.getCommandSenderName(), true, var5.ping));
+            EntityPlayerMP var1 = (EntityPlayerMP) this.playerEntityList.get(this.playerPingIndex);
+            this.func_148540_a(new S38PacketPlayerListItem(var1.getCommandSenderName(), true, var1.ping));
         }
     }
 
