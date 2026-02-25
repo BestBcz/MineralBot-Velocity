@@ -43,7 +43,7 @@ object PracticeAI {
                     getBoxingGoals(clientInstance)
             normalizedKit.contains("axe") || normalizedKit.contains("axes") ->
                     getAxeGoals(clientInstance)
-            normalizedKit.contains("combo") || normalizedKit.contains("speed") ->
+            normalizedKit.contains("combo") || normalizedKit.contains("nodelay") ->
                     getComboGoals(clientInstance)
             normalizedKit.contains("classic") || normalizedKit.contains("archer") ->
                     getClassicGoals(clientInstance)
@@ -162,6 +162,7 @@ object PracticeAI {
                 SelectKitGoal(clientInstance),
                 ReplaceArmorGoal(clientInstance),
                 DrinkPotionGoal(clientInstance), // Speed pots
+                EatGappleGoal(clientInstance),
                 SafeEatGoal(clientInstance),
                 MeleeCombatGoal(clientInstance)
         )
