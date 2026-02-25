@@ -16,13 +16,12 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound {
     override var executing: Boolean = false
     override var startTime: Long = 0
-    override val maxDuration: Long = 70
+    override val maxDuration: Long = 42
 
     private var lastLavaPlaceTick = 0
     private var actionLockUntilTick = 0
     private var matchStartTick = -1
     private var preFightGappleUsed = false
-    private var lastBowThreatTick = -200
     private var waterState = WaterState.IDLE
     private var waterStateStartTick = 0
     private var lastGappleEatTick = -200
@@ -47,7 +46,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val enemy = getClosestEnemy()
 
         if (needsEmergencyWater()) return true
-        if (isBowThreatActive()) return hasBlocks()
 
         // BuildUHC opening: around 4s after spawn, pre-gap once when enemy is not already close.
         if (!preFightGappleUsed &&
@@ -105,16 +103,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         for (i in 0..35) {
             val item = inventory.getItemStackAt(i) ?: continue
             if (item.item.id == Item.GOLDEN_APPLE && item.durability == 0) return true
-        }
-        return false
-    }
-
-    private fun hasBlocks(): Boolean {
-        val inventory = clientInstance.fakePlayer.inventory
-        for (i in 0..35) {
-            val item = inventory.getItemStackAt(i) ?: continue
-            val id = item.item.id
-            if (id in 1..5 || id == 24 || id == 45 || id == 48 || id == 98) return true
         }
         return false
     }
@@ -186,16 +174,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         for (i in 0..35) {
             val item = inventory.getItemStackAt(i) ?: continue
             if (item.item.id == Item.WATER_BUCKET || item.item.id == Item.BUCKET) return i
-        }
-        return -1
-    }
-
-    private fun getBlockSlot(): Int {
-        val inventory = clientInstance.fakePlayer.inventory
-        for (i in 0..35) {
-            val item = inventory.getItemStackAt(i) ?: continue
-            val id = item.item.id
-            if (id in 1..5 || id == 24 || id == 45 || id == 48 || id == 98) return i
         }
         return -1
     }
@@ -303,46 +281,68 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         }
 
         tick.execute {
-            val angles = computeOptimalYawAndPitch(clientInstance.fakePlayer, enemy)
+            val bot = clientInstance.fakePlayer
+            val lateralBoost = (enemy.x - enemy.lastX) * 3.2
+            val forwardBoost = (enemy.z - enemy.lastZ) * 3.2
+            val predictedX = enemy.x + lateralBoost
+            val predictedY = enemy.y + enemy.eyeHeight * 0.57
+            val predictedZ = enemy.z + forwardBoost
+
+            val predictedEnemy = object : ClientPlayer by enemy {
+                override val x: Double get() = predictedX
+                override val y: Double get() = predictedY
+                override val z: Double get() = predictedZ
+            }
+            val angles = computeOptimalYawAndPitch(bot, predictedEnemy)
             setMouseYaw(angles[1])
-            setMousePitch((angles[0] + 8f).coerceIn(-12f, 42f))
+            setMousePitch((angles[0] + 4f).coerceIn(-14f, 38f))
             pressButton(35, MouseButton.Type.RIGHT_CLICK)
-            lockAction(7)
+            lockAction(5)
         }
         return true
     }
 
-    private fun hasNearbyRecoverableFluid(radius: Double = 2.6): Boolean {
+    private data class FluidTarget(val x: Double, val y: Double, val z: Double)
+
+    private fun findNearestRecoverableFluid(radius: Double = 3.2): FluidTarget? {
         val fakePlayer = clientInstance.fakePlayer
         val world = fakePlayer.world
+        var best: FluidTarget? = null
+        var bestDist = Double.MAX_VALUE
 
-        for (x in -2..2) {
-            for (y in -1..1) {
-                for (z in -2..2) {
+        for (x in -3..3) {
+            for (y in -2..2) {
+                for (z in -3..3) {
                     val bx = fakePlayer.x + x
                     val by = fakePlayer.y + y
                     val bz = fakePlayer.z + z
                     val id = world.getBlockAt(bx, by, bz).id
                     if (id != Block.WATER_FLOWING && id != Block.WATER_STILL && id != Block.LAVA_FLOWING && id != Block.LAVA_STILL) continue
-                    val dist = sqrt((bx - fakePlayer.x) * (bx - fakePlayer.x) + (bz - fakePlayer.z) * (bz - fakePlayer.z))
-                    if (dist <= radius) return true
+                    val dist = sqrt((bx - fakePlayer.x) * (bx - fakePlayer.x) + (by - fakePlayer.y) * (by - fakePlayer.y) + (bz - fakePlayer.z) * (bz - fakePlayer.z))
+                    if (dist <= radius && dist < bestDist) {
+                        bestDist = dist
+                        best = FluidTarget(bx + 0.5, by + 0.06, bz + 0.5)
+                    }
                 }
             }
         }
 
+        if (best != null) return best
+
         if (!placedLavaX.isNaN()) {
             val id = world.getBlockAt(placedLavaX, placedLavaY, placedLavaZ).id
-            if (id == Block.LAVA_FLOWING || id == Block.LAVA_STILL) return true
+            if (id == Block.LAVA_FLOWING || id == Block.LAVA_STILL) {
+                return FluidTarget(placedLavaX + 0.5, placedLavaY + 0.06, placedLavaZ + 0.5)
+            }
         }
-
-        return false
+        return null
     }
 
     private fun shouldRecoverPlacedFluid(): Boolean {
         val now = clientInstance.currentTick
         if (!clientInstance.fakePlayer.inventory.contains(Item.BUCKET)) return false
         if (now - placedLavaTick < 80 && now - placedWaterTick < 80) return false
-        return hasNearbyRecoverableFluid()
+        return findNearestRecoverableFluid() != null
     }
 
     private fun tryRecoverFluid(tick: Tick, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
@@ -355,50 +355,28 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         }
 
         tick.execute {
-            setMousePitch(86f)
+            val fakePlayer = clientInstance.fakePlayer
+            val target = findNearestRecoverableFluid()
+            if (target != null) {
+                val dx = target.x - fakePlayer.x
+                val dy = target.y - (fakePlayer.y + fakePlayer.eyeHeight)
+                val dz = target.z - fakePlayer.z
+                val horizDist = sqrt(dx * dx + dz * dz).coerceAtLeast(0.001)
+                val yaw = Math.toDegrees(-fastArcTan(dx / dz)).toFloat().let {
+                    when {
+                        dz < 0 && dx < 0 -> (90 + Math.toDegrees(fastArcTan(dz / dx))).toFloat()
+                        dz < 0 && dx > 0 -> (-90 + Math.toDegrees(fastArcTan(dz / dx))).toFloat()
+                        else -> it
+                    }
+                }
+                val pitch = Math.toDegrees(-fastArcTan(dy / horizDist)).toFloat().coerceIn(60f, 89f)
+                setMouseYaw(yaw)
+                setMousePitch(pitch)
+            } else {
+                setMousePitch(86f)
+            }
             pressButton(70, MouseButton.Type.RIGHT_CLICK)
-            lockAction(6)
-        }
-        return true
-    }
-
-    // Approximation: if enemy is medium/far and looking in our direction, treat as bow threat.
-    // We intentionally keep this window wider to react earlier against bow kiting.
-    private fun isBowThreatActive(): Boolean {
-        val enemy = getClosestEnemy() ?: return false
-        val fakePlayer = clientInstance.fakePlayer
-        val distance = fakePlayer.distance3DTo(enemy)
-        if (distance < 6.0) return false
-
-        val expected = computeOptimalYawAndPitch(enemy, fakePlayer)
-        val enemyYawDiff = kotlin.math.abs(angleDifference(enemy.yaw, expected[1]))
-        val enemyPitchDiff = kotlin.math.abs(angleDifference(enemy.pitch, expected[0]))
-
-        if (enemyYawDiff < 42f && enemyPitchDiff < 32f) {
-            lastBowThreatTick = clientInstance.currentTick
-        }
-
-        return clientInstance.currentTick - lastBowThreatTick <= 34
-    }
-
-    private fun handleBowDefense(tick: Tick, enemy: ClientPlayer, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
-        val blockSlot = getBlockSlot()
-        if (blockSlot == -1) return false
-
-        tick.prerequisite("Block In Hotbar", blockSlot <= 8) {
-            moveItemToHotbar(blockSlot, inventory)
-        }
-        tick.prerequisite("Holding Block", inventory.heldSlot == resolveHotbarSlot(blockSlot)) {
-            selectHotbarSlot(resolveHotbarSlot(blockSlot))
-        }
-
-        tick.execute {
-            val angles = computeOptimalYawAndPitch(clientInstance.fakePlayer, enemy)
-            // Face enemy first, then force view to own front-ground so block places on ground ahead.
-            setMouseYaw(angles[1])
-            setMousePitch(68f)
-            pressButton(180, MouseButton.Type.RIGHT_CLICK)
-            lockAction(18)
+            lockAction(4)
         }
         return true
     }
@@ -462,10 +440,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
         if (canStartAction() && shouldRecoverPlacedFluid()) {
             if (tryRecoverFluid(tick, inventory)) return
-        }
-
-        if (enemy != null && isBowThreatActive() && canStartAction()) {
-            if (handleBowDefense(tick, enemy, inventory)) return
         }
 
         if (!preFightGappleUsed &&
@@ -581,6 +555,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     override fun onEnd() {
         unpressButton(MouseButton.Type.RIGHT_CLICK)
+        unpressKey(Key.Type.KEY_A, Key.Type.KEY_D)
         waterState = WaterState.IDLE
     }
 

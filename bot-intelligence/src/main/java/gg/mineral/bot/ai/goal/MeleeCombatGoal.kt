@@ -100,7 +100,13 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val target = this.target ?: return
 
         val fakePlayer = clientInstance.fakePlayer
-        val optimalAngles = computeOptimalYawAndPitch(fakePlayer, target)
+        val predictedX = target.x + (target.x - target.lastX) * 1.15
+        val predictedZ = target.z + (target.z - target.lastZ) * 1.15
+        val predictedTarget = object : ClientPlayer by target {
+            override val x: Double get() = predictedX
+            override val z: Double get() = predictedZ
+        }
+        val optimalAngles = computeOptimalYawAndPitch(fakePlayer, predictedTarget)
 
         if (fakePlayer.distance3DTo(target) > 6.0f) {
             setMouseYaw(optimalAngles[1])
