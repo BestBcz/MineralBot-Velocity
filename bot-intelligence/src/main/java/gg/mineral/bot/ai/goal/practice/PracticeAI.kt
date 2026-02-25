@@ -29,7 +29,7 @@ object PracticeAI {
         val normalizedKit = kitType.lowercase().replace(" ", "").replace("_", "")
 
         return when {
-            normalizedKit.contains("nodebuff") || normalizedKit.contains("potpvp") ->
+            normalizedKit.contains("nodebuff") || normalizedKit.contains("nomisplace") ->
                     getNoDebuffGoals(clientInstance)
             normalizedKit.contains("debuff") -> getDebuffGoals(clientInstance)
             normalizedKit.contains("sumo") -> getSumoGoals(clientInstance)
@@ -132,7 +132,9 @@ object PracticeAI {
         return arrayOf(
                 SelectKitGoal(clientInstance),
                 ReplaceArmorGoal(clientInstance),
-                EatGappleGoal(clientInstance), // Priority: Gapple for regen
+                DrinkPotionGoal(clientInstance),
+                DrinkStrengthPotionGoal(clientInstance),
+                EatEnchantedGappleGoal(clientInstance),
                 SafeEatGoal(clientInstance),
                 MeleeCombatGoal(clientInstance)
         )
@@ -162,7 +164,7 @@ object PracticeAI {
                 SelectKitGoal(clientInstance),
                 ReplaceArmorGoal(clientInstance),
                 DrinkPotionGoal(clientInstance), // Speed pots
-                EatGappleGoal(clientInstance),
+                EatEnchantedGappleGoal(clientInstance),
                 SafeEatGoal(clientInstance),
                 MeleeCombatGoal(clientInstance)
         )
