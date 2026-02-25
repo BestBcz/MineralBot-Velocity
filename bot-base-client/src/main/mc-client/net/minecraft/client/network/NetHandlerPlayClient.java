@@ -526,7 +526,11 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
                 thePlayer.prevPosZ = thePlayer.posZ;
             }
             this.doneLoadingTerrain = true;
-            this.gameController.displayGuiScreen(null);
+            try {
+                this.gameController.displayGuiScreen(null);
+            } catch (NullPointerException npe) {
+                logger.warn("Ignored GUI init race while closing loading screen", npe);
+            }
         }
     }
 
@@ -1533,9 +1537,13 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
             var3 = var2.getObjective(p_147291_1_.func_149339_c());
 
             if (p_147291_1_.func_149338_e() == 1) {
-                var2.func_96519_k(var3);
+                if (var3 != null) {
+                    var2.func_96519_k(var3);
+                }
             } else if (p_147291_1_.func_149338_e() == 2) {
-                var3.setDisplayName(p_147291_1_.func_149337_d());
+                if (var3 != null) {
+                    var3.setDisplayName(p_147291_1_.func_149337_d());
+                }
             }
         }
     }
@@ -1554,6 +1562,9 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         ScoreObjective var3 = var2.getObjective(p_147250_1_.func_149321_d());
 
         if (p_147250_1_.func_149322_f() == 0) {
+            if (var3 == null) {
+                return;
+            }
             Score var4 = var2.func_96529_a(p_147250_1_.func_149324_c(), var3);
             var4.func_96647_c(p_147250_1_.func_149323_e());
         } else if (p_147250_1_.func_149322_f() == 1) {

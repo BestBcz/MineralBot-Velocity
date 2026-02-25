@@ -23,7 +23,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound {
     override var executing: Boolean = false
     override var startTime: Long = 0
-    override val maxDuration: Long = 36
+    override val maxDuration: Long = 28
 
     private var lastRodTick = 0
     private var rodState = RodState.IDLE
@@ -31,13 +31,12 @@ class FishingRodGoal(clientInstance: ClientInstance) :
     private enum class RodState {
         IDLE,
         THROWING,
-        IN_FLIGHT,
-        REELING
+        IN_FLIGHT
     }
 
     override fun shouldExecute(): Boolean {
         // Rod cooldown: shorter so bot uses rod more aggressively.
-        if (clientInstance.currentTick - lastRodTick < 14) return false
+        if (clientInstance.currentTick - lastRodTick < 9) return false
 
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
@@ -48,7 +47,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         val distance = fakePlayer.distance3DTo(enemy)
 
         // Use rod more often to create/deny spacing before melee re-engage.
-        return distance >= 2.8 && distance <= 11.5
+        return distance >= 2.2 && distance <= 12.0
     }
 
     override fun onStart() {
@@ -90,6 +89,36 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         return -1
     }
 
+    private fun getBestMeleeWeaponSlot(): Int {
+        val fakePlayer = clientInstance.fakePlayer
+        val inventory = fakePlayer.inventory
+
+        var bestSlot = 0
+        var bestDamage = Double.NEGATIVE_INFINITY
+
+        for (i in 0..35) {
+            val itemStack = inventory.getItemStackAt(i) ?: continue
+            val damage = itemStack.attackDamage
+            if (damage > bestDamage) {
+                bestDamage = damage
+                bestSlot = i
+            }
+        }
+
+        return bestSlot
+    }
+
+    private fun switchBackToMelee(inventory: gg.mineral.bot.api.inv.Inventory) {
+        val meleeWeaponSlot = getBestMeleeWeaponSlot()
+        if (meleeWeaponSlot <= 8) {
+            selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
+            return
+        }
+
+        moveItemToHotbar(meleeWeaponSlot, inventory)
+        selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
+    }
+
     override fun onTick(tick: Tick) {
         val rodSlot = getRodSlot()
         val fakePlayer = clientInstance.fakePlayer
@@ -105,6 +134,17 @@ class FishingRodGoal(clientInstance: ClientInstance) :
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
 
+        // Enemy in hit range -> immediately hand control back to melee goal.
+        val distance = fakePlayer.distance3DTo(enemy)
+        if (distance <= 3.05) {
+            tick.execute {
+                switchBackToMelee(inventory)
+                lastRodTick = clientInstance.currentTick
+                finish()
+            }
+            return
+        }
+
         tick.prerequisite("In Hotbar", rodSlot <= 8) { moveItemToHotbar(rodSlot, inventory) }
 
         tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
@@ -116,8 +156,8 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         when (rodState) {
             RodState.IDLE -> {
                 // Aim at enemy with prediction
-                val predictedX = enemy.x + (enemy.x - enemy.lastX) * 2
-                val predictedZ = enemy.z + (enemy.z - enemy.lastZ) * 2
+                val predictedX = enemy.x + (enemy.x - enemy.lastX) * 2.9
+                val predictedZ = enemy.z + (enemy.z - enemy.lastZ) * 2.9
 
                 val dx = predictedX - fakePlayer.x
                 val dz = predictedZ - fakePlayer.z
@@ -127,7 +167,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
                         else enemy.y + enemy.eyeHeight * 0.62
                 val dy = targetY - (fakePlayer.y + fakePlayer.eyeHeight)
 
-                val horizDist = sqrt(dx * dx + dz * dz)
+                val horizDist = sqrt(dx * dx + dz * dz).coerceAtLeast(0.001)
                 val yaw =
                         Math.toDegrees(-fastArcTan(dx / dz)).toFloat().let {
                             when {
@@ -151,25 +191,23 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
                 tick.execute { rodState = RodState.THROWING }
             }
+
             RodState.THROWING -> {
                 tick.execute {
                     pressButton(25, MouseButton.Type.RIGHT_CLICK)
                     rodState = RodState.IN_FLIGHT
                 }
             }
+
             RodState.IN_FLIGHT -> {
-                // Wait for hook to travel
+                // No explicit reel-in needed: switch back to melee weapon,
+                // hook will be naturally cleaned up by item switch / later rod use.
                 tick.execute {
-                    if (tickCount > 9) { // Faster reel for snappier rod cycles
-                        rodState = RodState.REELING
+                    if (tickCount > 4) {
+                        switchBackToMelee(inventory)
+                        lastRodTick = clientInstance.currentTick
+                        finish()
                     }
-                }
-            }
-            RodState.REELING -> {
-                tick.execute {
-                    pressButton(25, MouseButton.Type.RIGHT_CLICK) // Reel in
-                    lastRodTick = clientInstance.currentTick
-                    finish()
                 }
             }
         }

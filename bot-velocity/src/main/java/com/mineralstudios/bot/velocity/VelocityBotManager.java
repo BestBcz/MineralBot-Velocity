@@ -445,6 +445,36 @@ public class VelocityBotManager {
                                     }
                                 } catch (Exception e) {
                                     logger.error("Error in bot game loop", e);
+
+                                    String message = e.toString();
+                                    boolean timeoutLike = message != null && message.contains("ReadTimeoutException");
+                                    if (!timeoutLike && e.getCause() != null) {
+                                        String causeMsg = e.getCause().toString();
+                                        timeoutLike = causeMsg != null && causeMsg.contains("ReadTimeoutException");
+                                    }
+
+                                    if (timeoutLike && retryCount < 3) {
+                                        logger.warn("Bot {} hit read timeout, recreating (retry #{})", finalBotUsername,
+                                                retryCount + 1);
+                                        try {
+                                            bot.shutdown();
+                                        } catch (Exception ignored) {
+                                        }
+
+                                        activeBots.remove(botUUID);
+                                        botTargets.remove(botUUID);
+                                        kitTypes.remove(botUUID);
+                                        botsByUsername.remove(finalBotUsername);
+
+                                        com.velocitypowered.api.scheduler.ScheduledTask t = botTasks.remove(botUUID);
+                                        if (t != null) {
+                                            t.cancel();
+                                        }
+
+                                        server.getScheduler().buildTask(plugin, () ->
+                                                createAndConnectBot(playerUUID, serverName, kitType, retryCount + 1)
+                                        ).delay(1200, TimeUnit.MILLISECONDS).schedule();
+                                    }
                                 }
                             } else {
                                 // Bot stopped running, clean up if not already done
@@ -473,7 +503,7 @@ public class VelocityBotManager {
     private String generateUniqueBotUsername(String kitType) {
         String username;
         do {
-            username = "BOT_" + kitType + generateRandomSuffix(3);
+            username = kitType + generateRandomSuffix(3);
         } while (botsByUsername.containsKey(username));
         return username;
     }
