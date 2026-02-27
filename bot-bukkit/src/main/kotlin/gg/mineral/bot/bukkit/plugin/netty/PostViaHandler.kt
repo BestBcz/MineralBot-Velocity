@@ -11,8 +11,7 @@ class PostViaHandler : ChannelDuplexHandler() {
     override fun channelRead(ctx: ChannelHandlerContext, buf: Any) {
         val channel = ctx.channel()
 
-        val connectionState = channel.attr(BukkitChannelInjector.CONNECTION_STATE).get()
-            ?: error("Unable to get connection state from channel.")
+        val connectionState = channel.attr(BukkitChannelInjector.CONNECTION_STATE).get() ?: State.PLAY
 
         val isHandshake = connectionState == State.HANDSHAKE
         val isLogin = connectionState == State.LOGIN

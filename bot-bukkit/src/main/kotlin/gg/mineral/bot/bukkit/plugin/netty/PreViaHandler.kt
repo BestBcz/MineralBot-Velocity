@@ -18,10 +18,9 @@ class PreViaHandler(private val onLogin: (Channel) -> Unit) : ChannelDuplexHandl
 
     override fun channelRead(ctx: ChannelHandlerContext, buf: Any) {
         val channel = ctx.channel()
-        val userConnection =
-            getUserConnection(channel) ?: error("Unable to get UserConnection from channel pipeline.")
+        val userConnection = getUserConnection(channel)
 
-        val connectionState = userConnection.protocolInfo.serverState
+        val connectionState = userConnection?.protocolInfo?.serverState ?: State.LOGIN
 
         channel.attr(BukkitChannelInjector.CONNECTION_STATE).set(connectionState)
 

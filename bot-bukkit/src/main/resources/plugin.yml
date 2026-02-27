@@ -3,8 +3,9 @@ version: 2.1.0
 main: gg.mineral.bot.bukkit.plugin.MineralBotPlugin
 author: Jaiden
 description: Mineral Bot Plugin
-api: '1.8.9'
-depend: [ packetevents, ViaVersion, ViaRewind, ViaBackwards ]
+api: '1.7.10'
+depend: [ packetevents ]
+softdepend: [ ViaVersion, ViaRewind, ViaBackwards ]
 
 commands:
   mineralbot:

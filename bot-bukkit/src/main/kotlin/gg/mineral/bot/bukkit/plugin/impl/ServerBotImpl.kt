@@ -147,7 +147,7 @@ class ServerBotImpl : BotImpl() {
                 pipeline.get("packet_handler")
                     ?: error("Unable to find server network manager for address $localAddress")
 
-            pipeline.addAfter("splitter", "mineral_bot_pre_via", PreViaHandler {
+            val onLogin: (Channel) -> Unit = {
                 it.sendPacket(
                     WrapperLoginServerLoginSuccess(
                         configuration.uuid,
@@ -162,9 +162,24 @@ class ServerBotImpl : BotImpl() {
                 )
 
                 onLoginStart(it, serverSide, future)
-            })
+            }
 
-            pipeline.addBefore("decoder", "mineral_bot_post_via", PostViaHandler())
+            when {
+                pipeline.get("splitter") != null ->
+                    pipeline.addAfter("splitter", "mineral_bot_pre_via", PreViaHandler(onLogin))
+
+                pipeline.get("decoder") != null ->
+                    pipeline.addBefore("decoder", "mineral_bot_pre_via", PreViaHandler(onLogin))
+
+                else ->
+                    pipeline.addFirst("mineral_bot_pre_via", PreViaHandler(onLogin))
+            }
+
+            if (pipeline.get("decoder") != null) {
+                pipeline.addBefore("decoder", "mineral_bot_post_via", PostViaHandler())
+            } else {
+                pipeline.addLast("mineral_bot_post_via", PostViaHandler())
+            }
 
             ThreadManager.asyncExecutor.execute {
                 try {

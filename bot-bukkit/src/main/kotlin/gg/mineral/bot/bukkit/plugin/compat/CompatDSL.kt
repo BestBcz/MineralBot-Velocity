@@ -7,6 +7,7 @@ import gg.mineral.bot.api.world.ServerWorld
 import gg.mineral.bot.bukkit.plugin.impl.player.BukkitServerPlayer
 import io.netty.channel.ChannelHandler
 import java.util.*
+import gg.mineral.bot.bukkit.plugin.compat.v1_7_R4.NMSServerPlayer as V1_7_10ServerPlayer
 import gg.mineral.bot.bukkit.plugin.compat.v1_8_R3.NMSServerPlayer as V1_8_8ServerPlayer
 
 private val nmsVersion get() = PacketEvents.getAPI().serverManager.version
@@ -27,7 +28,13 @@ fun newBukkitServerPlayer(
             disableEntityCollisions = disableEntityCollisions
         )
 
-        ServerVersion.V_1_7_10 -> TODO()
+        ServerVersion.V_1_7_10 -> V1_7_10ServerPlayer(
+            world,
+            uuid,
+            name,
+            *skinData,
+            disableEntityCollisions = disableEntityCollisions
+        )
         ServerVersion.V_1_8 -> TODO()
         ServerVersion.V_1_8_3 -> TODO()
         ServerVersion.V_1_9 -> TODO()
@@ -96,7 +103,11 @@ fun newPlayerConnection(
             player.entityPlayer as net.minecraft.server.v1_8_R3.EntityPlayer
         )
 
-        ServerVersion.V_1_7_10 -> TODO()
+        ServerVersion.V_1_7_10 -> net.minecraft.server.v1_7_R4.PlayerConnection(
+            net.minecraft.server.v1_7_R4.MinecraftServer.getServer(),
+            channelHandler as net.minecraft.server.v1_7_R4.NetworkManager,
+            player.entityPlayer as net.minecraft.server.v1_7_R4.EntityPlayer
+        )
         ServerVersion.V_1_8 -> TODO()
         ServerVersion.V_1_8_3 -> TODO()
         ServerVersion.V_1_9 -> TODO()
@@ -164,7 +175,11 @@ fun ChannelHandler.setConnectionState(
             )
         )
 
-        ServerVersion.V_1_7_10 -> TODO()
+        ServerVersion.V_1_7_10 -> (this as? net.minecraft.server.v1_7_R4.NetworkManager)?.a(
+            net.minecraft.server.v1_7_R4.EnumProtocol.valueOf(
+                state.name
+            )
+        )
         ServerVersion.V_1_8 -> TODO()
         ServerVersion.V_1_8_3 -> TODO()
         ServerVersion.V_1_9 -> TODO()
