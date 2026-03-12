@@ -23,7 +23,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound {
     override var executing: Boolean = false
     override var startTime: Long = 0
-    override val maxDuration: Long = 28
+    override val maxDuration: Long = 12
 
     private var lastRodTick = 0
     private var rodState = RodState.IDLE
@@ -213,6 +213,9 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         }
     }
 
+    override fun blocksContinuousAim(): Boolean = true
+
+    override fun blocksContinuousAttack(): Boolean = true
     override fun onEnd() {
         rodState = RodState.IDLE
     }

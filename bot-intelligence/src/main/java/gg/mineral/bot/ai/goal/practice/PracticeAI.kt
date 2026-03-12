@@ -96,10 +96,8 @@ object PracticeAI {
         return arrayOf(
                 SelectKitGoal(clientInstance),
                 ReplaceArmorGoal(clientInstance),
-                EatGoldenHeadGoal(clientInstance), // Priority: Golden head when critical
-                EatGappleGoal(clientInstance), // Eat gapple for regen
-                FishingRodGoal(clientInstance), // Rod for knockback
-                BuildUHCCombatGoal(clientInstance), // Lava, blocks, etc.
+                FishingRodGoal(clientInstance), // Rod pressure should stay short-lived
+                BuildUHCCombatGoal(clientInstance), // BuildUHC-specific heads/gapples/lava/water
                 SafeEatGoal(clientInstance),
                 MeleeCombatGoal(clientInstance)
         )
