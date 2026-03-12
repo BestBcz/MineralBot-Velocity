@@ -118,17 +118,17 @@ public class GuiNewChat extends Gui {
         }
     }
 
-    public void func_146231_a() {
+    public synchronized void func_146231_a() {
         this.field_146253_i.clear();
         this.field_146252_h.clear();
         this.field_146248_g.clear();
     }
 
-    public void func_146227_a(IChatComponent p_146227_1_) {
+    public synchronized void func_146227_a(IChatComponent p_146227_1_) {
         this.func_146234_a(p_146227_1_, 0);
     }
 
-    public void func_146234_a(IChatComponent p_146234_1_, int p_146234_2_) {
+    public synchronized void func_146234_a(IChatComponent p_146234_1_, int p_146234_2_) {
         this.func_146237_a(p_146234_1_, p_146234_2_, this.mc.ingameGUI.getUpdateCounter(), false);
         if (!BotGlobalConfig.headless)
             logger.info("[CHAT] {}", p_146234_1_.getUnformattedText());
@@ -139,7 +139,7 @@ public class GuiNewChat extends Gui {
                 : EnumChatFormatting.getTextWithoutFormattingCodes(p_146235_1_);
     }
 
-    private void func_146237_a(IChatComponent p_146237_1_, int p_146237_2_, int p_146237_3_, boolean p_146237_4_) {
+    private synchronized void func_146237_a(IChatComponent p_146237_1_, int p_146237_2_, int p_146237_3_, boolean p_146237_4_) {
         if (p_146237_2_ != 0) {
             this.func_146242_c(p_146237_2_);
         }
@@ -214,20 +214,20 @@ public class GuiNewChat extends Gui {
             }
         }
 
-        while (this.field_146253_i.size() > 100) {
+        while (!this.field_146253_i.isEmpty() && this.field_146253_i.size() > 100) {
             this.field_146253_i.remove(this.field_146253_i.size() - 1);
         }
 
         if (!p_146237_4_) {
             this.field_146252_h.add(0, new ChatLine(p_146237_3_, p_146237_1_, p_146237_2_));
 
-            while (this.field_146252_h.size() > 100) {
+            while (!this.field_146252_h.isEmpty() && this.field_146252_h.size() > 100) {
                 this.field_146252_h.remove(this.field_146252_h.size() - 1);
             }
         }
     }
 
-    public void func_146245_b() {
+    public synchronized void func_146245_b() {
         this.field_146253_i.clear();
         this.resetScroll();
 
@@ -248,12 +248,12 @@ public class GuiNewChat extends Gui {
         }
     }
 
-    public void resetScroll() {
+    public synchronized void resetScroll() {
         this.field_146250_j = 0;
         this.field_146251_k = false;
     }
 
-    public void func_146229_b(int p_146229_1_) {
+    public synchronized void func_146229_b(int p_146229_1_) {
         this.field_146250_j += p_146229_1_;
         int var2 = this.field_146253_i.size();
 
@@ -323,7 +323,7 @@ public class GuiNewChat extends Gui {
         return this.mc.currentScreen instanceof GuiChat;
     }
 
-    public void func_146242_c(int p_146242_1_) {
+    public synchronized void func_146242_c(int p_146242_1_) {
         Iterator var2 = this.field_146253_i.iterator();
         ChatLine var3;
 
