@@ -27,7 +27,12 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     private var currentVerticalAimAcceleration = 1.0f
     private var lastHorizontalTurnSignum = 1
     private var lastVerticalTurnSignum = 1
-
+    private var lastSeenTargetTick = -200
+    private var lastKnownTargetX = 0.0
+    private var lastKnownTargetY = 0.0
+    private var lastKnownTargetZ = 0.0
+    private var smoothedTargetVelX = 0.0
+    private var smoothedTargetVelZ = 0.0
     override fun shouldExecute() = true
 
     private fun findTarget() {
@@ -35,36 +40,90 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
         val fakePlayer = clientInstance.fakePlayer
         val world = fakePlayer.world
-
         val entities = world.entities
 
-        if (clientInstance.currentTick - lastTargetSwitchTick < 20 && target?.let {
-                entities.contains(it) && isTargetValid(
-                    it,
-                    targetSearchRange.toFloat()
-                )
-            } == true
-        ) return
+        if (clientInstance.currentTick - lastTargetSwitchTick < 20) {
+            val currentTarget = target
+            if (currentTarget != null && entities.contains(currentTarget) &&
+                isTargetValid(currentTarget, targetSearchRange.toFloat())
+            ) {
+                noteTargetState(currentTarget)
+                return
+            }
+        }
 
         var closestTarget: ClientPlayer? = null
         var closestDistance = Double.MAX_VALUE
 
         for (entity in entities) {
-            if (entity is ClientPlayer) {
-                if (isTargetValid(entity, targetSearchRange.toFloat())) {
-                    val distance = fakePlayer.distance3DTo(entity)
-                    if (distance < closestDistance) {
-                        closestDistance = distance
-                        closestTarget = entity
-                    }
+            if (entity is ClientPlayer && isTargetValid(entity, targetSearchRange.toFloat())) {
+                val distance = fakePlayer.distance3DTo(entity)
+                if (distance < closestDistance) {
+                    closestDistance = distance
+                    closestTarget = entity
                 }
             }
+        }
+
+        if (closestTarget != null) {
+            noteTargetState(closestTarget)
         }
 
         if (closestTarget !== this.target) {
             lastTargetSwitchTick = clientInstance.currentTick
             this.target = closestTarget
         }
+    }
+
+    private fun noteTargetState(target: ClientPlayer) {
+        lastSeenTargetTick = clientInstance.currentTick
+        lastKnownTargetX = target.x
+        lastKnownTargetY = target.y
+        lastKnownTargetZ = target.z
+
+        val hasMotion = abs(target.motionX) > 0.001 || abs(target.motionZ) > 0.001
+        val rawVelX = if (hasMotion) target.motionX else target.x - target.lastX
+        val rawVelZ = if (hasMotion) target.motionZ else target.z - target.lastZ
+
+        smoothedTargetVelX = smoothedTargetVelX * 0.68 + rawVelX * 0.32
+        smoothedTargetVelZ = smoothedTargetVelZ * 0.68 + rawVelZ * 0.32
+    }
+
+    private fun buildPredictedTarget(target: ClientPlayer): ClientPlayer {
+        noteTargetState(target)
+
+        val distance = clientInstance.fakePlayer.distance3DTo(target)
+        val leadTicks =
+            when {
+                distance <= 2.4 -> 0.12
+                distance <= 3.6 -> 0.20
+                distance <= 5.0 -> 0.30
+                else -> 0.42
+            }
+        val maxLead =
+            when {
+                distance <= 2.8 -> 0.12
+                distance <= 4.5 -> 0.22
+                else -> 0.32
+            }
+
+        val leadX = (smoothedTargetVelX * leadTicks).coerceIn(-maxLead, maxLead)
+        val leadZ = (smoothedTargetVelZ * leadTicks).coerceIn(-maxLead, maxLead)
+        val predictedX = target.x + leadX
+        val predictedZ = target.z + leadZ
+
+        return object : ClientPlayer by target {
+            override val x: Double get() = predictedX
+            override val z: Double get() = predictedZ
+        }
+    }
+
+    private fun lastKnownTargetYaw(): Float {
+        val fakePlayer = clientInstance.fakePlayer
+        val dx = lastKnownTargetX - fakePlayer.x
+        val dz = lastKnownTargetZ - fakePlayer.z
+        if (abs(dx) < 0.001 && abs(dz) < 0.001) return fakePlayer.yaw
+        return toDegrees(fastArcTan2(-dx, dz)).toFloat()
     }
 
     private fun isTargetValid(entity: ClientLivingEntity, range: Float): Boolean {
@@ -100,32 +159,18 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val target = this.target ?: return
 
         val fakePlayer = clientInstance.fakePlayer
-        val predictedX = target.x + (target.x - target.lastX) * 1.15
-        val predictedZ = target.z + (target.z - target.lastZ) * 1.15
-        val predictedTarget = object : ClientPlayer by target {
-            override val x: Double get() = predictedX
-            override val z: Double get() = predictedZ
-        }
+        val predictedTarget = buildPredictedTarget(target)
         val optimalAngles = computeOptimalYawAndPitch(fakePlayer, predictedTarget)
+        val distance = fakePlayer.distance3DTo(target)
 
-        if (fakePlayer.distance3DTo(target) > 6.0f) {
+        if (distance > 6.0f) {
             setMouseYaw(optimalAngles[1])
             setMousePitch(optimalAngles[0])
             return
         }
 
-        val yawDiff = abs(
-            angleDifference(
-                fakePlayer.yaw,
-                optimalAngles[1]
-            ).toDouble()
-        )
-        val pitchDiff = abs(
-            angleDifference(
-                fakePlayer.pitch,
-                optimalAngles[0]
-            ).toDouble()
-        )
+        val yawDiff = abs(angleDifference(fakePlayer.yaw, optimalAngles[1]).toDouble())
+        val pitchDiff = abs(angleDifference(fakePlayer.pitch, optimalAngles[0]).toDouble())
 
         val distX = abs(fakePlayer.x - target.x)
         val distZ = abs(fakePlayer.z - target.z)
@@ -135,51 +180,56 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val pitchSpeed = calculateVerticalAimSpeed(pitchDiff) * currentVerticalAimAcceleration
 
         val config = clientInstance.configuration
+        val closeRange = distance <= 4.15
+        val horizontalAccuracy = max(config.horizontalAimAccuracy, if (closeRange) 0.92f else 0.78f)
+        val verticalAccuracy = max(config.verticalAimAccuracy, if (closeRange) 0.90f else 0.76f)
+        val horizontalErraticness = min(config.horizontalErraticness, if (closeRange) 0.07f else 0.16f)
+        val verticalErraticness = min(config.verticalErraticness, if (closeRange) 0.06f else 0.14f)
 
-        val currentHorizontalTurnSignum = signum(
-            angleDifference(fakePlayer.yaw, optimalAngles[1])
-        ).toInt()
+        val currentHorizontalTurnSignum = signum(angleDifference(fakePlayer.yaw, optimalAngles[1])).toInt()
 
-        if (currentHorizontalTurnSignum != lastHorizontalTurnSignum || currentHorizontalTurnSignum == 0) currentHorizontalAimAcceleration =
-            1.0f
-        else currentHorizontalAimAcceleration *= config.horizontalAimAcceleration
+        currentHorizontalAimAcceleration =
+            if (currentHorizontalTurnSignum != lastHorizontalTurnSignum || currentHorizontalTurnSignum == 0) {
+                1.0f
+            } else {
+                min(
+                    currentHorizontalAimAcceleration * config.horizontalAimAcceleration,
+                    config.horizontalAimMaxAccel
+                )
+            }
 
         setMouseYaw(
             getRotationTarget(
-                fakePlayer.yaw, optimalAngles[1],
-                abs(
-                    (yawSpeed
-                            * config.horizontalAimSpeed * 2.0)
-                ).toFloat(),
-                config.horizontalAimAccuracy,
-                config.horizontalErraticness
+                fakePlayer.yaw,
+                optimalAngles[1],
+                abs((yawSpeed * config.horizontalAimSpeed * 2.0)).toFloat(),
+                horizontalAccuracy,
+                horizontalErraticness
             )
         )
 
         lastHorizontalTurnSignum = currentHorizontalTurnSignum
 
-        // Give it a higher chance of aiming down
-        val verAccuracy = max(0.01f, config.verticalAimAccuracy)
-        val deviation = if (verAccuracy >= 1) 0f else 3f / verAccuracy
+        val pitchDeviation = if (verticalAccuracy >= 1) 0f else 1.2f / verticalAccuracy
+        val currentVerticalTurnSignum = signum(angleDifference(fakePlayer.pitch, optimalAngles[0])).toInt()
 
-        val currentVerticalTurnSignum = signum(
-            angleDifference(fakePlayer.pitch, optimalAngles[0])
-        ).toInt()
-
-        if (currentVerticalTurnSignum != lastVerticalTurnSignum || currentVerticalTurnSignum == 0) currentVerticalAimAcceleration =
-            1.0f
-        else currentVerticalAimAcceleration *= config.verticalAimAcceleration
+        currentVerticalAimAcceleration =
+            if (currentVerticalTurnSignum != lastVerticalTurnSignum || currentVerticalTurnSignum == 0) {
+                1.0f
+            } else {
+                min(
+                    currentVerticalAimAcceleration * config.verticalAimAcceleration,
+                    config.verticalAimMaxAccel
+                )
+            }
 
         setMousePitch(
             getRotationTarget(
                 fakePlayer.pitch,
-                optimalAngles[0] + deviation,
-                abs(
-                    (pitchSpeed
-                            * config.verticalAimSpeed * 2.0)
-                ).toFloat(),
-                verAccuracy,
-                config.verticalErraticness
+                optimalAngles[0] + pitchDeviation,
+                abs((pitchSpeed * config.verticalAimSpeed * 2.0)).toFloat(),
+                verticalAccuracy,
+                verticalErraticness
             )
         )
 
@@ -468,33 +518,53 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         return bestMeleeWeaponSlot
     }
 
+    private fun shouldYieldInventoryControl(): Boolean = clientInstance.blocksContinuousInventory
+
+    private fun shouldYieldAimControl(): Boolean = clientInstance.blocksContinuousAim
+
+    private fun shouldYieldAttackControl(): Boolean = clientInstance.blocksContinuousAttack
+
+    private fun shouldYieldMovementToUtility(): Boolean = clientInstance.blocksContinuousMovement
+
     override fun onTick(tick: Tick) {
+        val yieldingInventoryControl = shouldYieldInventoryControl()
+        val yieldingAimControl = shouldYieldAimControl()
+        val yieldingMovement = shouldYieldMovementToUtility()
 
-        pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
-
+        if (!yieldingMovement) {
+            pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+        }
 
         val meleeWeaponSlot = getBestMeleeWeaponSlot()
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
 
-        tick.prerequisite("In Hotbar", meleeWeaponSlot <= 8) {
-            moveItemToHotbar(meleeWeaponSlot, inventory)
+        if (!yieldingInventoryControl) {
+            tick.prerequisite("In Hotbar", meleeWeaponSlot <= 8) {
+                moveItemToHotbar(meleeWeaponSlot, inventory)
+            }
         }
 
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
-            pressKey(
-                10,
-                Key.Type.KEY_ESCAPE
-            )
+        if (!(clientInstance.hasActiveSporadicGoal && clientInstance.currentScreen is ContainerScreen)) {
+            tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+                pressKey(
+                    10,
+                    Key.Type.KEY_ESCAPE
+                )
+            }
         }
 
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(meleeWeaponSlot)) {
-            selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
+        if (!yieldingInventoryControl) {
+            tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(meleeWeaponSlot)) {
+                selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
+            }
         }
 
         tick.execute {
             findTarget()
-            aimAtTarget()
+            if (!yieldingAimControl) {
+                aimAtTarget()
+            }
         }
 
         if (this.target == null && timeMillis() - lastBounceTime > 1000) if (isCollidingWithWall) reflectOffWall()
@@ -529,19 +599,37 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     }
 
     public override fun onGameLoop() {
-        applyHumanizedMovement()
-        if (timeMillis() >= nextClick) attackTarget()
+        if (!shouldYieldMovementToUtility()) {
+            applyHumanizedMovement()
+        }
+        if (!shouldYieldAttackControl() && timeMillis() >= nextClick) {
+            attackTarget()
+        }
     }
 
 
     private fun applyHumanizedMovement() {
-        val target = this.target ?: run {
+        val target = this.target
+        val fakePlayer = clientInstance.fakePlayer
+
+        if (target == null) {
             unpressKey(Key.Type.KEY_A, Key.Type.KEY_D, Key.Type.KEY_S)
-            pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+            val ticksSinceSeen = clientInstance.currentTick - lastSeenTargetTick
+
+            if (ticksSinceSeen <= 8) {
+                setMouseYaw(lastKnownTargetYaw())
+                pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+            } else {
+                unpressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+                if (clientInstance.currentTick - lastSearchTurnTick >= 5) {
+                    searchTurnDirection *= -1
+                    lastSearchTurnTick = clientInstance.currentTick
+                }
+                setMouseYaw(fakePlayer.yaw + 14f * searchTurnDirection)
+            }
             return
         }
 
-        val fakePlayer = clientInstance.fakePlayer
         val distance = fakePlayer.distance3DTo(target)
         val winningTrade = recentHitsOnTarget >= recentHitsTaken + 1
 
