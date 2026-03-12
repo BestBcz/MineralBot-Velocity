@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.io.File;
 
 import gg.mineral.bot.base.client.instance.ClientInstance;
@@ -102,6 +103,9 @@ public class VelocityBotManager {
     // Track bot tasks: Bot UUID -> ScheduledTask
     private final Map<UUID, com.velocitypowered.api.scheduler.ScheduledTask> botTasks = new ConcurrentHashMap<>();
 
+    // Prevent repeated scheduler ticks from re-entering the same bot loop concurrently.
+    private final Map<UUID, AtomicBoolean> botLoopGuards = new ConcurrentHashMap<>();
+
     // Track server-assigned UUID to our UUID: Server UUID -> Our Bot UUID
     private final Map<UUID, UUID> serverUuidToOurUuid = new ConcurrentHashMap<>();
 
@@ -145,6 +149,145 @@ public class VelocityBotManager {
         return possiblyServerUuid;
     }
 
+    private UUID findCandidateBotUuid(UUID playerUUID, String kitType) {
+        for (Map.Entry<UUID, ClientInstance> entry : activeBots.entrySet()) {
+            UUID candidateUuid = entry.getKey();
+            ClientInstance candidate = entry.getValue();
+            if (!isBotUsable(candidate)) {
+                continue;
+            }
+
+            UUID targetUuid = botTargets.get(candidateUuid);
+            String candidateKit = kitTypes.get(candidateUuid);
+            if (playerUUID.equals(targetUuid) && candidateKit != null && candidateKit.equalsIgnoreCase(kitType)) {
+                return candidateUuid;
+            }
+        }
+        return null;
+    }
+
+    private UUID findUsableBotByKit(String kitType) {
+        for (Map.Entry<UUID, String> entry : kitTypes.entrySet()) {
+            UUID candidateUuid = entry.getKey();
+            ClientInstance candidate = activeBots.get(candidateUuid);
+            if (candidate != null && isBotUsable(candidate) && entry.getValue().equalsIgnoreCase(kitType)) {
+                return candidateUuid;
+            }
+        }
+        return null;
+    }
+
+    private boolean isBotUsable(ClientInstance bot) {
+        return bot != null && bot.isRunning() && !(bot.getCurrentScreen() instanceof GuiDisconnected);
+    }
+
+    private String findUsername(UUID ourBotUUID) {
+        for (Map.Entry<String, UUID> entry : botsByUsername.entrySet()) {
+            if (entry.getValue().equals(ourBotUUID)) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+
+    private String getDisconnectText(ClientInstance bot) {
+        Object currentScreen = bot.getCurrentScreen();
+        if (!(currentScreen instanceof GuiDisconnected)) {
+            return null;
+        }
+
+        IChatComponent reason = ((GuiDisconnected) currentScreen).getReason();
+        return reason != null ? reason.getUnformattedText() : "Disconnected";
+    }
+
+    private boolean isTimeoutLike(String text) {
+        return text != null && (text.contains("Timed out")
+                || text.contains("ReadTimeoutException")
+                || text.contains("disconnect.timeout"));
+    }
+
+    private boolean isFrequentConnectionKick(String text) {
+        return text != null && (text.contains("\u4f60\u7684\u94fe\u63a5\u6b21\u6570\u8fc7\u4e8e\u9891\u7e41")
+                || text.contains("\u7a0d\u540e\u518d\u8bd5"));
+    }
+
+    private void cleanupBot(UUID ourBotUUID, UUID serverBotUUID, boolean shutdownInstance) {
+        ClientInstance bot = activeBots.remove(ourBotUUID);
+        botTargets.remove(ourBotUUID);
+        kitTypes.remove(ourBotUUID);
+
+        if (serverBotUUID != null) {
+            serverUuidToOurUuid.remove(serverBotUUID);
+        }
+        serverUuidToOurUuid.entrySet().removeIf(entry -> entry.getValue().equals(ourBotUUID));
+
+        com.velocitypowered.api.scheduler.ScheduledTask task = botTasks.remove(ourBotUUID);
+        if (task != null) {
+            task.cancel();
+        }
+
+        botLoopGuards.remove(ourBotUUID);
+
+        String username = findUsername(ourBotUUID);
+        if (username != null) {
+            botsByUsername.remove(username);
+        }
+
+        if (!shutdownInstance || bot == null) {
+            return;
+        }
+
+        try {
+            File runDir = bot.mcDataDir;
+            bot.shutdown();
+
+            if (runDir != null && runDir.exists()) {
+                try {
+                    org.apache.commons.io.FileUtils.deleteDirectory(runDir);
+                    logger.info("Deleted bot run directory: {}", runDir.getAbsolutePath());
+                } catch (Exception e) {
+                    logger.warn("Failed to delete bot run directory: {}", runDir.getAbsolutePath(), e);
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Error shutting down bot {}", ourBotUUID, e);
+        }
+    }
+
+    private boolean handleDisconnectedBot(
+            UUID ourBotUUID,
+            ClientInstance bot,
+            UUID playerUUID,
+            String serverName,
+            String kitType,
+            int retryCount,
+            String botUsername
+    ) {
+        String disconnectText = getDisconnectText(bot);
+        if (disconnectText == null) {
+            return false;
+        }
+
+        logger.warn("Bot {} disconnected: {}", botUsername, disconnectText);
+        boolean frequentKick = isFrequentConnectionKick(disconnectText);
+        boolean timeoutLike = isTimeoutLike(disconnectText);
+
+        cleanupBot(ourBotUUID, null, true);
+
+        if (frequentKick && retryCount < 3) {
+            logger.warn("Bot {} was kicked for frequent connection. Retrying (#{})", botUsername, retryCount + 1);
+            server.getScheduler().buildTask(plugin, () ->
+                    createAndConnectBot(playerUUID, serverName, kitType, retryCount + 1)
+            ).delay(1, TimeUnit.SECONDS).schedule();
+        } else if (timeoutLike && retryCount < 3) {
+            logger.warn("Bot {} hit read timeout, recreating (retry #{})", botUsername, retryCount + 1);
+            server.getScheduler().buildTask(plugin, () ->
+                    createAndConnectBot(playerUUID, serverName, kitType, retryCount + 1)
+            ).delay(1200, TimeUnit.MILLISECONDS).schedule();
+        }
+
+        return true;
+    }
     @Subscribe
     public void onPluginMessage(PluginMessageEvent event) {
         ChannelIdentifier identifier = event.getIdentifier();
@@ -216,50 +359,42 @@ public class VelocityBotManager {
 
             logger.info("BotDuel started: Player={}, Bot(server)={}, Kit={}", playerUUID, serverBotUUID, kitType);
 
-            // Try to find the bot - first check if it's our UUID
             ClientInstance bot = activeBots.get(serverBotUUID);
             UUID ourBotUUID = serverBotUUID;
 
-            if (bot == null) {
-                // Server sent a different UUID - try to find our bot by iterating
-                // This happens when the server assigns a different UUID to the player
-                logger.info("Bot not found by server UUID, searching by kit type...");
+            if (!isBotUsable(bot)) {
+                logger.info("Bot not found by server UUID, searching by player UUID and kit type...");
+                UUID candidateUuid = findCandidateBotUuid(playerUUID, kitType);
+                if (candidateUuid == null) {
+                    logger.info("No exact player/kit match found, falling back to kit type...");
+                    candidateUuid = findUsableBotByKit(kitType);
+                }
 
-                for (Map.Entry<UUID, String> entry : kitTypes.entrySet()) {
-                    if (entry.getValue().equalsIgnoreCase(kitType) && activeBots.containsKey(entry.getKey())) {
-                        ourBotUUID = entry.getKey();
-                        bot = activeBots.get(ourBotUUID);
-
-                        // Map server UUID to our UUID for future lookups
-                        serverUuidToOurUuid.put(serverBotUUID, ourBotUUID);
-                        logger.info("Found bot by kit type: ourUUID={}, serverUUID={}", ourBotUUID, serverBotUUID);
-                        break;
-                    }
+                if (candidateUuid != null) {
+                    ourBotUUID = candidateUuid;
+                    bot = activeBots.get(ourBotUUID);
+                    serverUuidToOurUuid.put(serverBotUUID, ourBotUUID);
+                    logger.info("Matched bot: ourUUID={}, serverUUID={}", ourBotUUID, serverBotUUID);
                 }
             }
 
-            if (bot == null) {
-                logger.warn("Could not find bot for BotDuelStarted. Server UUID: {}", serverBotUUID);
+            if (!isBotUsable(bot)) {
+                logger.warn("Could not find active bot for BotDuelStarted. Server UUID: {}", serverBotUUID);
                 logger.warn("Active bots: {}", activeBots.keySet());
                 logger.warn("Kit types: {}", kitTypes);
                 return;
             }
 
-            // Store target for combat AI
             botTargets.put(ourBotUUID, playerUUID);
             kitTypes.put(ourBotUUID, kitType);
 
             logger.info("Configuring combat AI for bot {} with kit type: {}", ourBotUUID, kitType);
-
-            // Configure the bot with appropriate goals for this kit type
             PracticeAI.INSTANCE.configureBotForKit(bot, kitType);
-
             logger.info("Combat systems activated for bot {}", ourBotUUID);
         } catch (Exception e) {
             logger.error("Failed to parse BotDuelStarted message", e);
         }
     }
-
     private void handleBotDisconnect(ByteArrayDataInput in) {
         try {
             String botUUIDStr = in.readUTF();
@@ -267,60 +402,11 @@ public class VelocityBotManager {
 
             logger.info("Received BotDisconnect request for: {}", serverBotUUID);
 
-            // Resolve to our UUID
             UUID ourBotUUID = resolveToOurUuid(serverBotUUID);
             logger.info("Resolved to our UUID: {}", ourBotUUID);
 
-            ClientInstance bot = activeBots.remove(ourBotUUID);
-            botTargets.remove(ourBotUUID);
-            kitTypes.remove(ourBotUUID);
-            serverUuidToOurUuid.remove(serverBotUUID);
+            cleanupBot(ourBotUUID, serverBotUUID, true);
 
-            // Stop the scheduled task
-            com.velocitypowered.api.scheduler.ScheduledTask task = botTasks.remove(ourBotUUID);
-            if (task != null) {
-                task.cancel();
-                logger.info("Bot task cancelled for {}", ourBotUUID);
-            }
-
-            // Also remove from username map
-            String username = null;
-            for (Map.Entry<String, UUID> entry : botsByUsername.entrySet()) {
-                if (entry.getValue().equals(ourBotUUID)) {
-                    username = entry.getKey();
-                    break;
-                }
-            }
-            if (username != null) {
-                botsByUsername.remove(username);
-            }
-
-            if (bot != null) {
-                try {
-                    // Cache the run dir before shutdown might clear it (though it won't clear the
-                    // File object)
-                    File runDir = bot.mcDataDir;
-
-                    bot.shutdown();
-                    logger.info("Bot {} disconnected successfully", ourBotUUID);
-
-                    // Cleanup Run Directory
-                    if (runDir != null && runDir.exists()) {
-                        try {
-                            // Using FileUtils from Commons IO (shaded/relocated or available)
-                            // or just recursive delete
-                            org.apache.commons.io.FileUtils.deleteDirectory(runDir);
-                            logger.info("Deleted bot run directory: {}", runDir.getAbsolutePath());
-                        } catch (Exception e) {
-                            logger.warn("Failed to delete bot run directory: {}", runDir.getAbsolutePath(), e);
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.error("Error shutting down bot {}", ourBotUUID, e);
-                }
-            }
-
-            // Also disconnect through Velocity
             server.getPlayer(serverBotUUID).ifPresent(player -> {
                 player.disconnect(net.kyori.adventure.text.Component.text("§eMatch ended. GG!"));
             });
@@ -328,7 +414,6 @@ public class VelocityBotManager {
             logger.error("Failed to parse BotDisconnect message", e);
         }
     }
-
     private void createAndConnectBot(UUID playerUUID, String serverName, String kitType, int retryCount) {
         server.getScheduler().buildTask(plugin, () -> {
             try {
@@ -382,6 +467,7 @@ public class VelocityBotManager {
                 botTargets.put(botUUID, playerUUID);
                 kitTypes.put(botUUID, kitType);
                 botsByUsername.put(config.getUsername(), botUUID);
+                botLoopGuards.put(botUUID, new AtomicBoolean(false));
 
                 // Initialize
                 logger.info("Starting bot instance for {} (UUID: {})", config.getUsername(), botUUID);
@@ -403,46 +489,27 @@ public class VelocityBotManager {
 
                 // Schedule Game Loop
                 final String finalBotUsername = config.getUsername();
+                final AtomicBoolean loopGuard = botLoopGuards.get(botUUID);
                 com.velocitypowered.api.scheduler.ScheduledTask loopTask = server.getScheduler()
                         .buildTask(plugin, () -> {
-                            if (bot.isRunning()) {
+                            if (loopGuard == null || !loopGuard.compareAndSet(false, true)) {
+                                return;
+                            }
+
+                            try {
+                                if (!bot.isRunning()) {
+                                    cleanupBot(botUUID, null, false);
+                                    logger.info("Bot task self-cancelled for {}", botUUID);
+                                    return;
+                                }
+
+                                if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, retryCount,
+                                        finalBotUsername)) {
+                                    return;
+                                }
+
                                 try {
                                     bot.runGameLoop();
-
-                                    // Check for "Frequent connection" kick
-                                    Object currentScreen = bot.getCurrentScreen();
-                                    if (currentScreen instanceof GuiDisconnected) {
-                                        GuiDisconnected disconnectedScreen = (GuiDisconnected) currentScreen;
-                                        IChatComponent reason = disconnectedScreen.getReason();
-                                        if (reason != null) {
-                                            String text = reason.getUnformattedText();
-                                            if (text.contains("你的链接次数过于频繁") || text.contains("稍后再试")) {
-                                                logger.warn(
-                                                        "Bot {} was kicked for frequent connection. Initializing retry...",
-                                                        finalBotUsername);
-
-                                                // Clean up current bot
-                                                bot.shutdown();
-                                                activeBots.remove(botUUID);
-                                                botTargets.remove(botUUID);
-                                                kitTypes.remove(botUUID);
-                                                botsByUsername.remove(finalBotUsername);
-
-                                                com.velocitypowered.api.scheduler.ScheduledTask t = botTasks
-                                                        .remove(botUUID);
-                                                if (t != null) {
-                                                    t.cancel();
-                                                }
-
-                                                // Retry with new name after a small delay
-                                                server.getScheduler().buildTask(plugin, () -> {
-                                                    createAndConnectBot(playerUUID, serverName, kitType,
-                                                            retryCount + 1);
-                                                }).delay(1, TimeUnit.SECONDS).schedule();
-                                                return;
-                                            }
-                                        }
-                                    }
                                 } catch (Exception e) {
                                     logger.error("Error in bot game loop", e);
 
@@ -453,45 +520,43 @@ public class VelocityBotManager {
                                         timeoutLike = causeMsg != null && causeMsg.contains("ReadTimeoutException");
                                     }
 
-                                    if (timeoutLike && retryCount < 3) {
-                                        logger.warn("Bot {} hit read timeout, recreating (retry #{})", finalBotUsername,
-                                                retryCount + 1);
-                                        try {
-                                            bot.shutdown();
-                                        } catch (Exception ignored) {
+                                    boolean chatCrash = false;
+                                    for (StackTraceElement element : e.getStackTrace()) {
+                                        if ("net.minecraft.client.gui.GuiNewChat".equals(element.getClassName())) {
+                                            chatCrash = true;
+                                            break;
                                         }
-
-                                        activeBots.remove(botUUID);
-                                        botTargets.remove(botUUID);
-                                        kitTypes.remove(botUUID);
-                                        botsByUsername.remove(finalBotUsername);
-
-                                        com.velocitypowered.api.scheduler.ScheduledTask t = botTasks.remove(botUUID);
-                                        if (t != null) {
-                                            t.cancel();
+                                    }
+                                    if (!chatCrash && e.getCause() != null) {
+                                        for (StackTraceElement element : e.getCause().getStackTrace()) {
+                                            if ("net.minecraft.client.gui.GuiNewChat".equals(element.getClassName())) {
+                                                chatCrash = true;
+                                                break;
+                                            }
                                         }
+                                    }
 
-                                        server.getScheduler().buildTask(plugin, () ->
-                                                createAndConnectBot(playerUUID, serverName, kitType, retryCount + 1)
-                                        ).delay(1200, TimeUnit.MILLISECONDS).schedule();
+                                    if (timeoutLike || chatCrash) {
+                                        cleanupBot(botUUID, null, true);
+                                        if (retryCount < 3) {
+                                            logger.warn("Bot {} hit {}, recreating (retry #{})",
+                                                    finalBotUsername,
+                                                    timeoutLike ? "read timeout" : "chat crash",
+                                                    retryCount + 1);
+                                            server.getScheduler().buildTask(plugin, () ->
+                                                    createAndConnectBot(playerUUID, serverName, kitType, retryCount + 1)
+                                            ).delay(1200, TimeUnit.MILLISECONDS).schedule();
+                                        }
+                                        return;
                                     }
                                 }
-                            } else {
-                                // Bot stopped running, clean up if not already done
-                                activeBots.remove(botUUID);
-                                botTargets.remove(botUUID);
-                                kitTypes.remove(botUUID);
-                                botsByUsername.remove(finalBotUsername);
 
-                                // Self-cancel
-                                com.velocitypowered.api.scheduler.ScheduledTask t = botTasks.remove(botUUID);
-                                if (t != null) {
-                                    t.cancel();
-                                    logger.info("Bot task self-cancelled for {}", botUUID);
-                                }
+                                handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, retryCount,
+                                        finalBotUsername);
+                            } finally {
+                                loopGuard.set(false);
                             }
                         }).repeat(50, TimeUnit.MILLISECONDS).schedule();
-
                 botTasks.put(botUUID, loopTask);
 
             } catch (Exception e) {
