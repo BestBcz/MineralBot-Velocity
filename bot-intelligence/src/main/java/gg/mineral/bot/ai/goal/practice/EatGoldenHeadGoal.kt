@@ -134,6 +134,11 @@ class EatGoldenHeadGoal(clientInstance: ClientInstance) :
         }
     }
 
+    override fun blocksContinuousAim(): Boolean = true
+
+    override fun blocksContinuousAttack(): Boolean = true
+
+    override fun blocksContinuousMovement(): Boolean = true
     override fun onEnd() {
         eating = false
         unpressButton(MouseButton.Type.RIGHT_CLICK)
@@ -151,5 +156,9 @@ class EatGoldenHeadGoal(clientInstance: ClientInstance) :
         return false
     }
 
-    override fun onGameLoop() {}
+    override fun onGameLoop() {
+        if (eating && !getButton(MouseButton.Type.RIGHT_CLICK).isPressed) {
+            pressButton(MouseButton.Type.RIGHT_CLICK)
+        }
+    }
 }

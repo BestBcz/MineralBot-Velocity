@@ -157,6 +157,11 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         }
     }
 
+    override fun blocksContinuousAim(): Boolean = true
+
+    override fun blocksContinuousAttack(): Boolean = true
+
+    override fun blocksContinuousMovement(): Boolean = true
     override fun onEnd() {
         drinking = false
         unpressButton(MouseButton.Type.RIGHT_CLICK)
@@ -173,5 +178,9 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         return false
     }
 
-    public override fun onGameLoop() {}
+    public override fun onGameLoop() {
+        if (drinking && !getButton(MouseButton.Type.RIGHT_CLICK).isPressed) {
+            pressButton(MouseButton.Type.RIGHT_CLICK)
+        }
+    }
 }

@@ -151,6 +151,11 @@ class EatGappleGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstan
         }
     }
 
+    override fun blocksContinuousAim(): Boolean = true
+
+    override fun blocksContinuousAttack(): Boolean = true
+
+    override fun blocksContinuousMovement(): Boolean = true
     override fun onEnd() {
         eating = false
         unpressButton(MouseButton.Type.RIGHT_CLICK)
@@ -171,5 +176,8 @@ class EatGappleGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstan
     }
 
     public override fun onGameLoop() {
+        if (eating && !getButton(MouseButton.Type.RIGHT_CLICK).isPressed) {
+            pressButton(MouseButton.Type.RIGHT_CLICK)
+        }
     }
 }

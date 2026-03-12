@@ -3,6 +3,7 @@ package gg.mineral.bot.ai.goal.practice
 import gg.mineral.bot.ai.goal.type.InventoryGoal
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
+import gg.mineral.bot.api.entity.effect.PotionEffectType
 import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.goal.Sporadic
@@ -16,7 +17,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound {
     override var executing: Boolean = false
     override var startTime: Long = 0
-    override val maxDuration: Long = 42
+    override val maxDuration: Long = 72
 
     private var lastLavaPlaceTick = 0
     private var actionLockUntilTick = 0
@@ -31,16 +32,27 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     private var placedLavaX = Double.NaN
     private var placedLavaY = Double.NaN
     private var placedLavaZ = Double.NaN
+    private var eatState = EatState.NONE
+    private var eatStartTick = -1
 
     private enum class WaterState {
         IDLE,
         WAIT_TO_PICKUP
     }
 
+    private enum class EatState {
+        NONE,
+        OPENER_GAPPLE,
+        GOLDEN_APPLE,
+        GOLDEN_HEAD
+    }
+
     override fun shouldExecute(): Boolean {
         if (matchStartTick == -1) {
             matchStartTick = clientInstance.currentTick
         }
+
+        if (isEatingApple()) return true
 
         val fakePlayer = clientInstance.fakePlayer
         val enemy = getClosestEnemy()
@@ -69,6 +81,25 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     override fun onStart() {
         actionLockUntilTick = 0
         waterState = WaterState.IDLE
+    }
+
+    private fun isEatingApple(): Boolean = eatState != EatState.NONE
+
+    private fun hasRegenEffect(): Boolean {
+        val regenId = PotionEffectType.REGENERATION.id
+        return clientInstance.fakePlayer.activePotionEffectIds.any { it == regenId }
+    }
+
+    private fun beginEating(state: EatState) {
+        eatState = state
+        eatStartTick = clientInstance.currentTick
+        lockAction(34)
+    }
+
+    private fun clearEatingState() {
+        eatState = EatState.NONE
+        eatStartTick = -1
+        unpressButton(MouseButton.Type.RIGHT_CLICK)
     }
 
     private fun canStartAction(): Boolean {
@@ -255,6 +286,51 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return clientInstance.currentTick - lastHeadEatTick >= 200
     }
 
+    private fun handleOngoingEat(
+        tick: Tick,
+        inventory: gg.mineral.bot.api.inv.Inventory,
+        enemy: ClientPlayer?
+    ): Boolean {
+        if (!isEatingApple()) return false
+
+        val preferHead = eatState == EatState.GOLDEN_HEAD
+        val eatSlot = getGoldenAppleSlot(preferHead = preferHead)
+        if (eatSlot == -1) {
+            tick.execute {
+                clearEatingState()
+                finish()
+            }
+            return true
+        }
+
+        tick.prerequisite("Eat Item In Hotbar", eatSlot <= 8) {
+            moveItemToHotbar(eatSlot, inventory)
+        }
+        tick.prerequisite("Holding Eat Item", inventory.heldSlot == resolveHotbarSlot(eatSlot)) {
+            selectHotbarSlot(resolveHotbarSlot(eatSlot))
+        }
+
+        tick.execute {
+            pressButton(MouseButton.Type.RIGHT_CLICK)
+            keepForward()
+            if (enemy != null && clientInstance.fakePlayer.distance3DTo(enemy) < 12.0) {
+                val x = enemy.x - clientInstance.fakePlayer.x
+                val z = enemy.z - clientInstance.fakePlayer.z
+                var yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat()
+                if (z < 0.0 && x < 0.0) yaw = (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
+                else if (z < 0.0 && x > 0.0) yaw = (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
+                setMouseYaw(yaw + 180.0f)
+            }
+        }
+
+        val eatenLongEnough = eatStartTick != -1 && clientInstance.currentTick - eatStartTick >= 34
+        if (eatenLongEnough || hasRegenEffect()) {
+            tick.execute { clearEatingState() }
+        }
+
+        return true
+    }
+
     private fun isSafeToEat(enemy: ClientPlayer?): Boolean {
         val fakePlayer = clientInstance.fakePlayer
         if (enemy == null) return true
@@ -431,6 +507,10 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
         keepForward()
 
+        if (handleOngoingEat(tick, inventory, enemy)) {
+            return
+        }
+
         if (needsEmergencyWater()) {
             if (handleEmergencyWater(tick, inventory)) {
                 actionTaken = true
@@ -458,7 +538,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.execute {
                     pressButton(MouseButton.Type.RIGHT_CLICK)
                     preFightGappleUsed = true
-                    lockAction(12)
+                    beginEating(EatState.OPENER_GAPPLE)
                 }
                 return
             }
@@ -479,7 +559,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.execute {
                     pressButton(MouseButton.Type.RIGHT_CLICK)
                     keepForward()
-                    lockAction(10)
+                    beginEating(EatState.GOLDEN_HEAD)
                     lastHeadEatTick = clientInstance.currentTick
                 }
                 return
@@ -501,7 +581,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.execute {
                     pressButton(MouseButton.Type.RIGHT_CLICK)
                     keepForward()
-                    lockAction(10)
+                    beginEating(EatState.GOLDEN_APPLE)
                     lastGappleEatTick = clientInstance.currentTick
                 }
                 return
@@ -553,8 +633,20 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (!actionTaken) finish()
     }
 
+    override fun blocksContinuousAim(): Boolean {
+        return isEatingApple() || waterState != WaterState.IDLE || clientInstance.currentTick <= actionLockUntilTick
+    }
+
+    override fun blocksContinuousAttack(): Boolean {
+        return isEatingApple() || waterState != WaterState.IDLE || clientInstance.currentTick <= actionLockUntilTick
+    }
+
+    override fun blocksContinuousMovement(): Boolean {
+        return isEatingApple() || waterState != WaterState.IDLE || clientInstance.currentTick <= actionLockUntilTick
+    }
+
     override fun onEnd() {
-        unpressButton(MouseButton.Type.RIGHT_CLICK)
+        clearEatingState()
         unpressKey(Key.Type.KEY_A, Key.Type.KEY_D)
         waterState = WaterState.IDLE
     }
@@ -564,7 +656,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     }
 
     override fun onGameLoop() {
-        if (clientInstance.currentTick > actionLockUntilTick + 8) {
+        if (!isEatingApple() && clientInstance.currentTick > actionLockUntilTick + 8) {
             unpressButton(MouseButton.Type.RIGHT_CLICK)
         }
     }

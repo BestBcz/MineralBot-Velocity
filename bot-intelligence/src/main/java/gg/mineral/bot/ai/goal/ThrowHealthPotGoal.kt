@@ -55,6 +55,7 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     private var maxHealthAfterThrow: Float = 0f
     private var splashApplied: Boolean = false
     private var damagedAfterThrow: Boolean = false
+    private var potionGoneTick: Int = -1
 
     override fun shouldExecute(): Boolean {
         // Cooldown between throws
@@ -88,6 +89,7 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         maxHealthAfterThrow = healthBeforeThrow
         splashApplied = false
         damagedAfterThrow = false
+            potionGoneTick = -1
         // Move forward by default
         pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
         unpressKey(Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
@@ -279,6 +281,7 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             maxHealthAfterThrow = fakePlayer.health
             splashApplied = false
             damagedAfterThrow = false
+            potionGoneTick = -1
             transitionTo(PotState.TRACKING)
         } else if (clientInstance.currentTick - stateStartTick > 10) {
             // Couldn't find thrown potion after 10 ticks, assume it failed
@@ -292,17 +295,20 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             splashApplied = true
         }
 
-        // Only enforce strict turn-away/turn-back behavior when there is no interference.
-        if (!damagedAfterThrow) {
-            if (splashApplied) {
+        if (splashApplied) {
+            if (!damagedAfterThrow) {
                 setMouseYaw(angleTowardsEnemies())
-                transitionTo(PotState.COOLDOWN)
-                return
             }
+            transitionTo(PotState.COOLDOWN)
+            return
+        }
 
+        if (!damagedAfterThrow) {
             // Keep running away until we confirm the potion has healed us.
             setMouseYaw(angleAwayFromEnemies())
         }
+
+        var potionTracked = false
 
         // Track the thrown potion if we can find it
         thrownPotionId?.let { potionId ->
@@ -312,6 +318,9 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
                 .find { it.entityId == potionId }
 
             if (potion != null) {
+                potionTracked = true
+                    potionGoneTick = -1
+
                 // Create trajectory from current position with actual velocity
                 val trajectory = SplashPotionTrajectory.fromVelocity(
                     fakePlayer.world,
@@ -345,9 +354,17 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
 
                     setMouseYaw(yaw)
                 }
-            } else {
-                // Potion disappeared, move to cooldown
+            }
+        }
+
+        if (!potionTracked) {
+            if (potionGoneTick == -1) {
+                potionGoneTick = clientInstance.currentTick
+            }
+
+            if (clientInstance.currentTick - potionGoneTick >= 4) {
                 transitionTo(PotState.COOLDOWN)
+                return
             }
         }
 
@@ -381,6 +398,11 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         }
     }
 
+    override fun blocksContinuousAim(): Boolean = currentState != PotState.COOLDOWN
+
+    override fun blocksContinuousAttack(): Boolean = currentState != PotState.COOLDOWN
+
+    override fun blocksContinuousMovement(): Boolean = currentState != PotState.COOLDOWN
     override fun onEnd() {
         if (clientInstance.currentScreen is ContainerScreen)
             pressKey(10, Key.Type.KEY_ESCAPE)
@@ -398,12 +420,13 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
                 }
             }
             is EntityDestroyEvent -> {
-                // If we're tracking a potion and it gets destroyed, move to cooldown
+                // Hold tracking briefly after the entity disappears so the splash can apply.
                 if (currentState == PotState.TRACKING &&
                     event.destroyedEntity is ClientPotion &&
-                    event.destroyedEntity.entityId == thrownPotionId
+                    event.destroyedEntity.entityId == thrownPotionId &&
+                    potionGoneTick == -1
                 ) {
-                    transitionTo(PotState.COOLDOWN)
+                    potionGoneTick = clientInstance.currentTick
                 }
             }
         }

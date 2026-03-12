@@ -135,6 +135,12 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
         }
     }
 
+    override fun blocksContinuousAim(): Boolean = true
+
+    override fun blocksContinuousAttack(): Boolean = true
+
+    override fun blocksContinuousMovement(): Boolean = true
+
     override fun onEnd() {
         if (eating) {
             lastEatTick = clientInstance.currentTick
@@ -158,5 +164,9 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
         return false
     }
 
-    public override fun onGameLoop() {}
+    public override fun onGameLoop() {
+        if (eating && !getButton(MouseButton.Type.RIGHT_CLICK).isPressed) {
+            pressButton(MouseButton.Type.RIGHT_CLICK)
+        }
+    }
 }
