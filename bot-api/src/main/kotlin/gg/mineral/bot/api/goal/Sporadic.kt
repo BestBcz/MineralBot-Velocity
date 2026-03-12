@@ -20,4 +20,12 @@ interface Sporadic {
     fun onStart()
 
     fun onEnd()
+
+    fun blocksContinuousInventory(): Boolean = true
+
+    fun blocksContinuousAim(): Boolean = false
+
+    fun blocksContinuousAttack(): Boolean = false
+
+    fun blocksContinuousMovement(): Boolean = false
 }
