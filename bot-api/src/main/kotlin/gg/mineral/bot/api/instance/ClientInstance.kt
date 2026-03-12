@@ -68,6 +68,36 @@ interface ClientInstance : EventHandler {
     val fakePlayer: FakePlayer
 
     /**
+     * Returns whether a sporadic foreground goal is currently executing.
+     */
+    val hasActiveSporadicGoal: Boolean
+        get() = false
+
+    /**
+     * Returns whether the active foreground goal is holding inventory control.
+     */
+    val blocksContinuousInventory: Boolean
+        get() = false
+
+    /**
+     * Returns whether the active foreground goal is holding aim control.
+     */
+    val blocksContinuousAim: Boolean
+        get() = false
+
+    /**
+     * Returns whether the active foreground goal is holding attack control.
+     */
+    val blocksContinuousAttack: Boolean
+        get() = false
+
+    /**
+     * Returns whether the active foreground goal is holding movement control.
+     */
+    val blocksContinuousMovement: Boolean
+        get() = false
+
+    /**
      * Checks if the client is running.
      *
      * @return true if the client is running

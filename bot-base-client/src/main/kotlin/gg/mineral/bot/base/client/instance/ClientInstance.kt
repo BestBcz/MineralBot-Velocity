@@ -29,6 +29,7 @@ import java.util.*
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.atomic.AtomicReference
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiScreen
 import net.minecraft.client.multiplayer.WorldClient
@@ -73,6 +74,7 @@ open class ClientInstance(
 
     // Guide-created ghost targets so we can clean them up when real server entities exist.
     private val guideTargetEntityIds = mutableMapOf<UUID, Int>()
+    private val pendingGuideUpdate = AtomicReference<GuideUpdate?>()
 
     override var latency: Int = 0
 
@@ -82,6 +84,16 @@ open class ClientInstance(
         get() = super.keyboard
     override val mouse: Mouse
         get() = super.mouse
+    override val hasActiveSporadicGoal: Boolean
+        get() = activeSporadicGoal() != null
+    override val blocksContinuousInventory: Boolean
+        get() = activeSporadic()?.blocksContinuousInventory() == true
+    override val blocksContinuousAim: Boolean
+        get() = activeSporadic()?.blocksContinuousAim() == true
+    override val blocksContinuousAttack: Boolean
+        get() = activeSporadic()?.blocksContinuousAttack() == true
+    override val blocksContinuousMovement: Boolean
+        get() = activeSporadic()?.blocksContinuousMovement() == true
 
     init {
         mainThread = null
@@ -92,6 +104,27 @@ open class ClientInstance(
         fun canSend(currentTime: Long): Boolean = currentTime >= sendTime
     }
 
+    private data class GuideUpdate(
+            val bX: Double,
+            val bY: Double,
+            val bZ: Double,
+            val bYaw: Float,
+            val bPitch: Float,
+            val bHealth: Float,
+            val bFood: Int,
+            val bSat: Float,
+            val targetUuid: UUID,
+            val tX: Double,
+            val tY: Double,
+            val tZ: Double,
+            val tYaw: Float,
+            val tPitch: Float,
+            val tVelX: Double,
+            val tVelY: Double,
+            val tVelZ: Double,
+            val tHealth: Float,
+            val tBlocking: Boolean
+    )
     /**
      * Schedules a task to run after a delay. If called on the main thread with zero delay and no
      * queued tasks, the task executes immediately.
@@ -107,7 +140,7 @@ open class ClientInstance(
     }
 
     /** Returns true if the current thread is the main game thread. */
-    override fun isMainThread(): Boolean = Thread.currentThread().name.contains("GameLoop")
+    override fun isMainThread(): Boolean = Thread.currentThread() == mainThread
 
     override val gameLoopExecutor: ScheduledExecutorService
         get() = ThreadManager.gameLoopExecutor
@@ -115,24 +148,46 @@ open class ClientInstance(
     override val asyncExecutor: ExecutorService
         get() = ThreadManager.asyncExecutor
 
-    override fun runGameLoop() {
-        if (!running) return
-
-        var executing = false
+    private fun activeSporadicGoal(): Goal? {
         for (goal in goals) {
             if (goal is Sporadic && goal.executing) {
-                goal.callGameLoop()
-                executing = true
-                break
+                return goal
             }
         }
-        if (!executing) {
-            for (goal in goals) {
-                if (goal.checkExecute()) {
-                    goal.callGameLoop()
-                    break
-                }
+        return null
+    }
+
+    private fun activeSporadic(): Sporadic? = activeSporadicGoal() as? Sporadic
+
+    private fun foregroundGoal(): Goal? {
+        val activeGoal = activeSporadicGoal()
+        if (activeGoal != null) {
+            return activeGoal
+        }
+
+        for (goal in goals) {
+            if (goal is Sporadic && goal.checkExecute()) {
+                return goal
             }
+        }
+        return null
+    }
+
+    private inline fun forEachContinuousGoal(action: (Goal) -> Unit) {
+        for (goal in goals) {
+            if (goal !is Sporadic && goal.checkExecute()) {
+                action(goal)
+            }
+        }
+    }
+
+    override fun runGameLoop() {
+        if (!running) return
+        mainThread = Thread.currentThread()
+
+        foregroundGoal()?.callGameLoop()
+        forEachContinuousGoal { goal ->
+            goal.callGameLoop()
         }
 
         val currentTime = getSystemTime()
@@ -158,26 +213,21 @@ open class ClientInstance(
         get() = super.getSession()
 
     override fun <T : Event> callEvent(event: T): Boolean {
-        var executing = false
-        for (goal in goals) {
-            if (goal is Sporadic && goal.executing) {
-                goal.onEvent(event)
-                executing = true
-                break
-            }
+        var cancelled = false
+
+        activeSporadicGoal()?.let { goal ->
+            cancelled = goal.onEvent(event) || cancelled
         }
-        if (!executing) {
-            for (goal in goals) {
-                if (goal.checkExecute()) {
-                    goal.onEvent(event)
-                    break
-                }
-            }
+
+        forEachContinuousGoal { goal ->
+            cancelled = goal.onEvent(event) || cancelled
         }
-        return false
+
+        return cancelled
     }
 
     override fun runTick() {
+        applyPendingGuideUpdate()
         super.runTick()
         currentTick++
 
@@ -191,21 +241,9 @@ open class ClientInstance(
                         )
                         .toInt()
 
-        var executing = false
-        for (goal in goals) {
-            if (goal is Sporadic && goal.executing) {
-                goal.callTick()
-                executing = true
-                break
-            }
-        }
-        if (!executing) {
-            for (goal in goals) {
-                if (goal.checkExecute()) {
-                    goal.callTick()
-                    break
-                }
-            }
+        foregroundGoal()?.callTick()
+        forEachContinuousGoal { goal ->
+            goal.callTick()
         }
     }
 
@@ -392,6 +430,11 @@ open class ClientInstance(
             super.displayWidth = value
         }
 
+    private fun applyPendingGuideUpdate() {
+        val update = pendingGuideUpdate.getAndSet(null) ?: return
+        applyGuideUpdate(update)
+    }
+
     companion object {
         private val logger = LogManager.getLogger(ClientInstance::class.java)
     }
@@ -418,43 +461,75 @@ open class ClientInstance(
             tHealth: Float,
             tBlocking: Boolean
     ) {
+        val update =
+                GuideUpdate(
+                        bX,
+                        bY,
+                        bZ,
+                        bYaw,
+                        bPitch,
+                        bHealth,
+                        bFood,
+                        bSat,
+                        targetUuid,
+                        tX,
+                        tY,
+                        tZ,
+                        tYaw,
+                        tPitch,
+                        tVelX,
+                        tVelY,
+                        tVelZ,
+                        tHealth,
+                        tBlocking
+                )
+
+        if (!isMainThread()) {
+            pendingGuideUpdate.set(update)
+            return
+        }
+
+        applyGuideUpdate(update)
+    }
+
+    private fun applyGuideUpdate(update: GuideUpdate) {
         val player = this.thePlayer
         if (player != null) {
-            player.setHealth(bHealth)
+            player.setHealth(update.bHealth)
             // player.foodStats.foodLevel = bFood // Accessor might vary
             // player.foodStats.saturationLevel = bSat
         }
 
         val world = this.theWorld
         if (world != null) {
-            var targetEntity = world.playerEntities.firstOrNull { it.gameProfile.id == targetUuid }
-            val guideEid = targetUuid.hashCode() or Int.MIN_VALUE
+            var targetEntity = world.playerEntities.firstOrNull { it.gameProfile.id == update.targetUuid }
+            val guideEid = update.targetUuid.hashCode() or Int.MIN_VALUE
 
             if (targetEntity != null) {
-                guideTargetEntityIds.remove(targetUuid)?.let { world.removeEntityFromWorld(it) }
+                guideTargetEntityIds.remove(update.targetUuid)?.let { world.removeEntityFromWorld(it) }
             } else {
                 val existing = world.getEntityByID(guideEid)
                 targetEntity = if (existing is net.minecraft.client.entity.EntityOtherPlayerMP) {
                     existing
                 } else {
-                    val profile = com.mojang.authlib.GameProfile(targetUuid, "Target")
+                    val profile = com.mojang.authlib.GameProfile(update.targetUuid, "Target")
                     net.minecraft.client.entity.EntityOtherPlayerMP(this, world, profile).also {
                         // This guide-only entity is for aim info and must not affect collisions/knockback.
                         it.noClip = true
                         world.addEntityToWorld(guideEid, it)
-                        guideTargetEntityIds[targetUuid] = guideEid
+                        guideTargetEntityIds[update.targetUuid] = guideEid
                     }
                 }
             }
 
             // Update target state - Target MUST be exact as we don't simulate it
-            targetEntity.setPositionAndRotation(tX, tY, tZ, tYaw, tPitch)
+            targetEntity.setPositionAndRotation(update.tX, update.tY, update.tZ, update.tYaw, update.tPitch)
             if (targetEntity is net.minecraft.entity.EntityLivingBase) {
-                targetEntity.setHealth(tHealth)
+                targetEntity.setHealth(update.tHealth)
             }
-            targetEntity.motionX = tVelX
-            targetEntity.motionY = tVelY
-            targetEntity.motionZ = tVelZ
+            targetEntity.motionX = update.tVelX
+            targetEntity.motionY = update.tVelY
+            targetEntity.motionZ = update.tVelZ
         }
     }
 
