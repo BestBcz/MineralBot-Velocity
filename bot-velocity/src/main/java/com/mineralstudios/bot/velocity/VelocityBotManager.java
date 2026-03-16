@@ -495,7 +495,7 @@ public class VelocityBotManager {
                         "1.7.10");
 
                 // Set Connection Info - connect to proxy
-                bot.setServer("127.0.0.1", 25565);
+                bot.setServer("127.0.0.1", 25566);
 
                 // Track the bot and kit type
                 activeBots.put(botUUID, bot);
