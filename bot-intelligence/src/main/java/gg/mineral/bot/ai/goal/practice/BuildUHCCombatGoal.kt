@@ -128,9 +128,14 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return inventory.contains(Item.LAVA_BUCKET)
     }
 
-    private fun hasWater(): Boolean {
+    private fun hasWaterBucket(): Boolean {
         val inventory = clientInstance.fakePlayer.inventory
-        return inventory.contains(Item.WATER_BUCKET) || inventory.contains(Item.BUCKET)
+        return inventory.contains(Item.WATER_BUCKET)
+    }
+
+    private fun hasEmptyBucket(): Boolean {
+        val inventory = clientInstance.fakePlayer.inventory
+        return inventory.contains(Item.BUCKET)
     }
 
     private fun hasNormalGapple(): Boolean {
@@ -204,11 +209,20 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return normalGapple
     }
 
-    private fun getWaterControlSlot(): Int {
+    private fun getWaterPlacementSlot(): Int {
         val inventory = clientInstance.fakePlayer.inventory
         for (i in 0..35) {
             val item = inventory.getItemStackAt(i) ?: continue
-            if (item.item.id == Item.WATER_BUCKET || item.item.id == Item.BUCKET) return i
+            if (item.item.id == Item.WATER_BUCKET) return i
+        }
+        return -1
+    }
+
+    private fun getBucketRecoverySlot(): Int {
+        val inventory = clientInstance.fakePlayer.inventory
+        for (i in 0..35) {
+            val item = inventory.getItemStackAt(i) ?: continue
+            if (item.item.id == Item.BUCKET) return i
         }
         return -1
     }
@@ -277,7 +291,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     private fun needsEmergencyWater(): Boolean {
         if (allBucketsEmpty()) return false
-        return hasWater() && (isInDangerousBlock() || waterState != WaterState.IDLE)
+        return (waterState != WaterState.IDLE && hasEmptyBucket()) || (hasWaterBucket() && isInDangerousBlock())
     }
 
     private fun canEatGappleNow(health: Float): Boolean {
@@ -309,6 +323,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
         tick.prerequisite("Eat Item In Hotbar", eatSlot <= 8) {
             moveItemToHotbar(eatSlot, inventory)
+        }
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+            pressKey(10, Key.Type.KEY_ESCAPE)
         }
         tick.prerequisite("Holding Eat Item", inventory.heldSlot == resolveHotbarSlot(eatSlot)) {
             selectHotbarSlot(resolveHotbarSlot(eatSlot))
@@ -356,6 +373,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (rodSlot == -1) return false
 
         tick.prerequisite("Rod In Hotbar", rodSlot <= 8) { moveItemToHotbar(rodSlot, inventory) }
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+            pressKey(10, Key.Type.KEY_ESCAPE)
+        }
         tick.prerequisite("Holding Rod", inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
             selectHotbarSlot(resolveHotbarSlot(rodSlot))
         }
@@ -426,10 +446,13 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     }
 
     private fun tryRecoverFluid(tick: Tick, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
-        val bucketSlot = getWaterControlSlot()
+        val bucketSlot = getBucketRecoverySlot()
         if (bucketSlot == -1) return false
 
         tick.prerequisite("Bucket In Hotbar", bucketSlot <= 8) { moveItemToHotbar(bucketSlot, inventory) }
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+            pressKey(10, Key.Type.KEY_ESCAPE)
+        }
         tick.prerequisite("Holding Bucket", inventory.heldSlot == resolveHotbarSlot(bucketSlot)) {
             selectHotbarSlot(resolveHotbarSlot(bucketSlot))
         }
@@ -462,7 +485,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     }
 
     private fun handleEmergencyWater(tick: Tick, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
-        val waterSlot = getWaterControlSlot()
+        val waterSlot =
+            if (waterState == WaterState.IDLE) getWaterPlacementSlot() else getBucketRecoverySlot()
         if (waterSlot == -1) {
             waterState = WaterState.IDLE
             return false
@@ -470,6 +494,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
         tick.prerequisite("Water Control In Hotbar", waterSlot <= 8) {
             moveItemToHotbar(waterSlot, inventory)
+        }
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+            pressKey(10, Key.Type.KEY_ESCAPE)
         }
         tick.prerequisite("Holding Water Control", inventory.heldSlot == resolveHotbarSlot(waterSlot)) {
             selectHotbarSlot(resolveHotbarSlot(waterSlot))
@@ -505,10 +532,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val enemy = getClosestEnemy()
         var actionTaken = false
 
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
-            pressKey(10, Key.Type.KEY_ESCAPE)
-        }
-
         keepForward()
 
         if (handleOngoingEat(tick, inventory, enemy)) {
@@ -536,6 +559,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.prerequisite("Opener Gapple In Hotbar", openerGapple <= 8) {
                     moveItemToHotbar(openerGapple, inventory)
                 }
+                tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+                    pressKey(10, Key.Type.KEY_ESCAPE)
+                }
                 tick.prerequisite("Holding Opener Gapple", inventory.heldSlot == resolveHotbarSlot(openerGapple)) {
                     selectHotbarSlot(resolveHotbarSlot(openerGapple))
                 }
@@ -556,6 +582,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             if (headSlot != -1) {
                 tick.prerequisite("Head In Hotbar", headSlot <= 8) {
                     moveItemToHotbar(headSlot, inventory)
+                }
+                tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+                    pressKey(10, Key.Type.KEY_ESCAPE)
                 }
                 tick.prerequisite("Holding Head", inventory.heldSlot == resolveHotbarSlot(headSlot)) {
                     selectHotbarSlot(resolveHotbarSlot(headSlot))
@@ -580,6 +609,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.prerequisite("Gapple In Hotbar", gappleSlot <= 8) {
                     moveItemToHotbar(gappleSlot, inventory)
                 }
+                tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+                    pressKey(10, Key.Type.KEY_ESCAPE)
+                }
                 tick.prerequisite("Holding Gapple", inventory.heldSlot == resolveHotbarSlot(gappleSlot)) {
                     selectHotbarSlot(resolveHotbarSlot(gappleSlot))
                 }
@@ -598,6 +630,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             if (lavaSlot != -1) {
                 tick.prerequisite("Lava In Hotbar", lavaSlot <= 8) {
                     moveItemToHotbar(lavaSlot, inventory)
+                }
+                tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+                    pressKey(10, Key.Type.KEY_ESCAPE)
                 }
                 tick.prerequisite("Holding Lava", inventory.heldSlot == resolveHotbarSlot(lavaSlot)) {
                     selectHotbarSlot(resolveHotbarSlot(lavaSlot))
