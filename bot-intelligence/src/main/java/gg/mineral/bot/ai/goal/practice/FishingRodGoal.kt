@@ -35,8 +35,8 @@ class FishingRodGoal(clientInstance: ClientInstance) :
     }
 
     override fun shouldExecute(): Boolean {
-        // Rod cooldown: shorter so bot uses rod more aggressively.
-        if (clientInstance.currentTick - lastRodTick < 9) return false
+        val config = clientInstance.configuration
+        if (clientInstance.currentTick - lastRodTick < config.rodCooldownTicks) return false
 
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
@@ -46,8 +46,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         val enemy = getClosestEnemy() ?: return false
         val distance = fakePlayer.distance3DTo(enemy)
 
-        // Use rod more often to create/deny spacing before melee re-engage.
-        return distance >= 2.2 && distance <= 12.0
+        return distance >= config.rodMinRange && distance <= config.rodMaxRange
     }
 
     override fun onStart() {
@@ -136,7 +135,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
         // Enemy in hit range -> immediately hand control back to melee goal.
         val distance = fakePlayer.distance3DTo(enemy)
-        if (distance <= 3.05) {
+        if (distance <= clientInstance.configuration.rodCancelRange) {
             tick.execute {
                 switchBackToMelee(inventory)
                 lastRodTick = clientInstance.currentTick
@@ -155,9 +154,10 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
         when (rodState) {
             RodState.IDLE -> {
+                val config = clientInstance.configuration
                 // Aim at enemy with prediction
-                val predictedX = enemy.x + (enemy.x - enemy.lastX) * 2.9
-                val predictedZ = enemy.z + (enemy.z - enemy.lastZ) * 2.9
+                val predictedX = enemy.x + (enemy.x - enemy.lastX) * config.rodPredictionMultiplier
+                val predictedZ = enemy.z + (enemy.z - enemy.lastZ) * config.rodPredictionMultiplier
 
                 val dx = predictedX - fakePlayer.x
                 val dz = predictedZ - fakePlayer.z
@@ -184,7 +184,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
                 val downwardBias =
                         ((horizDist / 8.0).coerceIn(5.0, 15.0) - if (enemy.isOnGround) 0.0 else 2.0)
                                 .toFloat()
-                val pitch = (basePitch + downwardBias).coerceIn(-20f, 36f)
+                val pitch = (basePitch + downwardBias + config.rodPitchBias).coerceIn(-20f, 36f)
 
                 setMouseYaw(yaw)
                 setMousePitch(pitch)

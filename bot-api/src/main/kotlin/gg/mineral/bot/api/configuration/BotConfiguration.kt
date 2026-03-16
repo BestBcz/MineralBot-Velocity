@@ -32,6 +32,14 @@ data class BotConfiguration(
     var predictionHorizon: Int = 5,
     var latencyDeviation: Int = 0,
     var pearlCooldown: Int = 15,
+    var rodCooldownTicks: Int = 9,
+    var rodMinRange: Double = 2.2,
+    var rodMaxRange: Double = 12.0,
+    var rodCancelRange: Double = 3.05,
+    var rodPredictionMultiplier: Double = 2.9,
+    var rodPitchBias: Float = 0.0f,
+    var pearlHealthThreshold: Float = 16.0f,
+    var strafeActivationRange: Double = 2.95,
     var skin: Skins = Skins.MINERAL_DEFAULT,
     var debug: Boolean = false,
     var disableEntityCollisions: Boolean = true,
@@ -76,6 +84,14 @@ data class BotConfiguration(
             private var predictionHorizon: Int = 5
             private var latencyDeviation: Int = 0
             private var pearlCooldown: Int = 15
+            private var rodCooldownTicks: Int = 9
+            private var rodMinRange: Double = 2.2
+            private var rodMaxRange: Double = 12.0
+            private var rodCancelRange: Double = 3.05
+            private var rodPredictionMultiplier: Double = 2.9
+            private var rodPitchBias: Float = 0.0f
+            private var pearlHealthThreshold: Float = 16.0f
+            private var strafeActivationRange: Double = 2.95
             private var skin: Skins = Skins.MINERAL_DEFAULT
             private var debug: Boolean = false
             private var disableEntityCollisions: Boolean = true
@@ -125,6 +141,20 @@ data class BotConfiguration(
             fun tcpNoDelay(tcpNoDelay: Boolean) = apply { this.instantFlush = tcpNoDelay }
             fun latencyDeviation(latencyDeviation: Int) = apply { this.latencyDeviation = latencyDeviation }
             fun pearlCooldown(pearlCooldown: Int) = apply { this.pearlCooldown = pearlCooldown }
+            fun rodCooldownTicks(rodCooldownTicks: Int) = apply { this.rodCooldownTicks = rodCooldownTicks }
+            fun rodMinRange(rodMinRange: Double) = apply { this.rodMinRange = rodMinRange }
+            fun rodMaxRange(rodMaxRange: Double) = apply { this.rodMaxRange = rodMaxRange }
+            fun rodCancelRange(rodCancelRange: Double) = apply { this.rodCancelRange = rodCancelRange }
+            fun rodPredictionMultiplier(rodPredictionMultiplier: Double) =
+                apply { this.rodPredictionMultiplier = rodPredictionMultiplier }
+
+            fun rodPitchBias(rodPitchBias: Float) = apply { this.rodPitchBias = rodPitchBias }
+            fun pearlHealthThreshold(pearlHealthThreshold: Float) =
+                apply { this.pearlHealthThreshold = pearlHealthThreshold }
+
+            fun strafeActivationRange(strafeActivationRange: Double) =
+                apply { this.strafeActivationRange = strafeActivationRange }
+
             fun skin(skin: Skins) = apply { this.skin = skin }
             fun debug(debug: Boolean) = apply { this.debug = debug }
             fun friendlyUUIDs(friendlyUUIDs: MutableSet<UUID>) = apply { this.friendlyUUIDs = friendlyUUIDs }
@@ -160,6 +190,14 @@ data class BotConfiguration(
                 predictionHorizon,
                 latencyDeviation,
                 pearlCooldown,
+                rodCooldownTicks,
+                rodMinRange,
+                rodMaxRange,
+                rodCancelRange,
+                rodPredictionMultiplier,
+                rodPitchBias,
+                pearlHealthThreshold,
+                strafeActivationRange,
                 skin,
                 debug,
                 disableEntityCollisions,

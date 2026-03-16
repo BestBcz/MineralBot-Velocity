@@ -1,6 +1,7 @@
 package gg.mineral.bot.ai.goal.practice
 
 import gg.mineral.bot.ai.goal.*
+import gg.mineral.bot.api.configuration.BotDifficulty
 import gg.mineral.bot.api.goal.Goal
 import gg.mineral.bot.api.instance.ClientInstance
 
@@ -202,6 +203,15 @@ object PracticeAI {
 
     /** Configure bot for specific kit type and start all goals. */
     fun configureBotForKit(clientInstance: ClientInstance, kitType: String) {
+        configureBotForKit(clientInstance, kitType, BotDifficulty.NORMAL)
+    }
+
+    fun configureBotForKit(
+        clientInstance: ClientInstance,
+        kitType: String,
+        difficulty: BotDifficulty
+    ) {
+        difficulty.applyTo(clientInstance.configuration)
         val goals = getGoalsForKit(clientInstance, kitType)
         clientInstance.startGoals(*goals)
     }

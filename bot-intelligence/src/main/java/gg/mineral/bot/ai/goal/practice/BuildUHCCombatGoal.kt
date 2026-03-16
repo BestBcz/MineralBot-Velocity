@@ -15,6 +15,10 @@ import gg.mineral.bot.api.world.block.Block
 
 class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound {
+    private companion object {
+        const val GAPPLE_EAT_THRESHOLD = 12.0f
+    }
+
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val maxDuration: Long = 72
@@ -72,7 +76,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val distance = fakePlayer.distance3DTo(enemy)
 
         if (needsGoldenHead() && canEatHeadNow(fakePlayer.health)) return true
-        if (needsGoldenApple() && fakePlayer.health < 10 && canEatGappleNow(fakePlayer.health)) return true
+        if (needsGoldenApple() && fakePlayer.health < GAPPLE_EAT_THRESHOLD && canEatGappleNow(fakePlayer.health)) return true
         if (shouldRecoverPlacedFluid()) return true
 
         return hasLava() && distance in 1.9..5.3 && fakePlayer.isOnGround && !allBucketsEmpty()
@@ -566,10 +570,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             }
         }
 
-        if (needsGoldenApple() && fakePlayer.health < 10 && canEatGappleNow(fakePlayer.health)) {
-            if (!isSafeToEat(enemy)) {
-                if (enemy != null && tryCreateEatWindow(tick, enemy, inventory)) return
-            }
+        if (needsGoldenApple() && fakePlayer.health < GAPPLE_EAT_THRESHOLD && canEatGappleNow(fakePlayer.health)) {
+            // Intentionally avoid the low-health rod opener here so BuildUHC gapple timing stays smoother.
+            // if (!isSafeToEat(enemy)) {
+            //     if (enemy != null && tryCreateEatWindow(tick, enemy, inventory)) return
+            // }
             val gappleSlot = getGoldenAppleSlot()
             if (gappleSlot != -1) {
                 tick.prerequisite("Gapple In Hotbar", gappleSlot <= 8) {

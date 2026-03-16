@@ -16,17 +16,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.io.File;
 
 import gg.mineral.bot.base.client.instance.ClientInstance;
+import gg.mineral.bot.api.configuration.BotDifficulty;
 import gg.mineral.bot.api.configuration.BotConfiguration;
 import gg.mineral.bot.ai.goal.practice.PracticeAI;
 import com.google.common.collect.ArrayListMultimap;
 import java.net.Proxy;
-import java.util.Random;
+import java.util.Locale;
 import net.minecraft.client.gui.GuiDisconnected;
 import net.minecraft.util.IChatComponent;
 
 public class VelocityBotManager {
-
-    private static final String BOT_NAME_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
     private final Object plugin;
     private final ProxyServer server;
@@ -96,6 +95,12 @@ public class VelocityBotManager {
     // Track kit types: Bot UUID -> Kit Type
     private final Map<UUID, String> kitTypes = new ConcurrentHashMap<>();
 
+    // Track difficulties: Bot UUID -> Bot Difficulty
+    private final Map<UUID, BotDifficulty> botDifficulties = new ConcurrentHashMap<>();
+
+    // Track request tokens: Bot UUID -> Pending request token
+    private final Map<UUID, String> botRequestTokens = new ConcurrentHashMap<>();
+
     // Track bot by username: Username -> Bot UUID (for matching when server sends
     // different UUID)
     private final Map<String, UUID> botsByUsername = new ConcurrentHashMap<>();
@@ -149,7 +154,7 @@ public class VelocityBotManager {
         return possiblyServerUuid;
     }
 
-    private UUID findCandidateBotUuid(UUID playerUUID, String kitType) {
+    private UUID findCandidateBotUuid(UUID playerUUID, String kitType, BotDifficulty difficulty, String requestToken) {
         for (Map.Entry<UUID, ClientInstance> entry : activeBots.entrySet()) {
             UUID candidateUuid = entry.getKey();
             ClientInstance candidate = entry.getValue();
@@ -159,18 +164,34 @@ public class VelocityBotManager {
 
             UUID targetUuid = botTargets.get(candidateUuid);
             String candidateKit = kitTypes.get(candidateUuid);
-            if (playerUUID.equals(targetUuid) && candidateKit != null && candidateKit.equalsIgnoreCase(kitType)) {
+            BotDifficulty candidateDifficulty = botDifficulties.get(candidateUuid);
+            String candidateToken = botRequestTokens.get(candidateUuid);
+            if (!playerUUID.equals(targetUuid)) {
+                continue;
+            }
+
+            if (requestToken != null && requestToken.equalsIgnoreCase(candidateToken)) {
+                return candidateUuid;
+            }
+
+            if (candidateKit != null
+                    && candidateKit.equalsIgnoreCase(kitType)
+                    && candidateDifficulty == difficulty) {
                 return candidateUuid;
             }
         }
         return null;
     }
 
-    private UUID findUsableBotByKit(String kitType) {
+    private UUID findUsableBotByKit(String kitType, BotDifficulty difficulty) {
         for (Map.Entry<UUID, String> entry : kitTypes.entrySet()) {
             UUID candidateUuid = entry.getKey();
             ClientInstance candidate = activeBots.get(candidateUuid);
-            if (candidate != null && isBotUsable(candidate) && entry.getValue().equalsIgnoreCase(kitType)) {
+            BotDifficulty candidateDifficulty = botDifficulties.get(candidateUuid);
+            if (candidate != null
+                    && isBotUsable(candidate)
+                    && entry.getValue().equalsIgnoreCase(kitType)
+                    && candidateDifficulty == difficulty) {
                 return candidateUuid;
             }
         }
@@ -215,6 +236,8 @@ public class VelocityBotManager {
         ClientInstance bot = activeBots.remove(ourBotUUID);
         botTargets.remove(ourBotUUID);
         kitTypes.remove(ourBotUUID);
+        botDifficulties.remove(ourBotUUID);
+        botRequestTokens.remove(ourBotUUID);
 
         if (serverBotUUID != null) {
             serverUuidToOurUuid.remove(serverBotUUID);
@@ -260,6 +283,8 @@ public class VelocityBotManager {
             UUID playerUUID,
             String serverName,
             String kitType,
+            BotDifficulty difficulty,
+            String requestToken,
             int retryCount,
             String botUsername
     ) {
@@ -277,12 +302,12 @@ public class VelocityBotManager {
         if (frequentKick && retryCount < 3) {
             logger.warn("Bot {} was kicked for frequent connection. Retrying (#{})", botUsername, retryCount + 1);
             server.getScheduler().buildTask(plugin, () ->
-                    createAndConnectBot(playerUUID, serverName, kitType, retryCount + 1)
+                    createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, retryCount + 1)
             ).delay(1, TimeUnit.SECONDS).schedule();
         } else if (timeoutLike && retryCount < 3) {
             logger.warn("Bot {} hit read timeout, recreating (retry #{})", botUsername, retryCount + 1);
             server.getScheduler().buildTask(plugin, () ->
-                    createAndConnectBot(playerUUID, serverName, kitType, retryCount + 1)
+                    createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, retryCount + 1)
             ).delay(1200, TimeUnit.MILLISECONDS).schedule();
         }
 
@@ -337,12 +362,15 @@ public class VelocityBotManager {
             String playerUUIDStr = in.readUTF();
             String serverName = in.readUTF();
             String kitType = in.readUTF();
+            BotDifficulty difficulty = BotDifficulty.fromId(in.readUTF());
+            String requestToken = in.readUTF();
 
             UUID playerUUID = UUID.fromString(playerUUIDStr);
 
-            logger.info("Received BotDuel request: Player={}, Server={}, Kit={}", playerUUID, serverName, kitType);
+            logger.info("Received BotDuel request: Player={}, Server={}, Kit={}, Difficulty={}, Token={}",
+                    playerUUID, serverName, kitType, difficulty.getId(), requestToken);
 
-            createAndConnectBot(playerUUID, serverName, kitType, 0);
+            createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, 0);
         } catch (Exception e) {
             logger.error("Failed to parse BotDuel message", e);
         }
@@ -353,21 +381,24 @@ public class VelocityBotManager {
             String playerUUIDStr = in.readUTF();
             String botUUIDStr = in.readUTF();
             String kitType = in.readUTF();
+            BotDifficulty difficulty = BotDifficulty.fromId(in.readUTF());
+            String requestToken = in.readUTF();
 
             UUID playerUUID = UUID.fromString(playerUUIDStr);
             UUID serverBotUUID = UUID.fromString(botUUIDStr);
 
-            logger.info("BotDuel started: Player={}, Bot(server)={}, Kit={}", playerUUID, serverBotUUID, kitType);
+            logger.info("BotDuel started: Player={}, Bot(server)={}, Kit={}, Difficulty={}, Token={}",
+                    playerUUID, serverBotUUID, kitType, difficulty.getId(), requestToken);
 
             ClientInstance bot = activeBots.get(serverBotUUID);
             UUID ourBotUUID = serverBotUUID;
 
             if (!isBotUsable(bot)) {
-                logger.info("Bot not found by server UUID, searching by player UUID and kit type...");
-                UUID candidateUuid = findCandidateBotUuid(playerUUID, kitType);
+                logger.info("Bot not found by server UUID, searching by player UUID, difficulty, and request token...");
+                UUID candidateUuid = findCandidateBotUuid(playerUUID, kitType, difficulty, requestToken);
                 if (candidateUuid == null) {
-                    logger.info("No exact player/kit match found, falling back to kit type...");
-                    candidateUuid = findUsableBotByKit(kitType);
+                    logger.info("No exact player/token match found, falling back to kit and difficulty...");
+                    candidateUuid = findUsableBotByKit(kitType, difficulty);
                 }
 
                 if (candidateUuid != null) {
@@ -387,9 +418,12 @@ public class VelocityBotManager {
 
             botTargets.put(ourBotUUID, playerUUID);
             kitTypes.put(ourBotUUID, kitType);
+            botDifficulties.put(ourBotUUID, difficulty);
+            botRequestTokens.put(ourBotUUID, requestToken);
 
-            logger.info("Configuring combat AI for bot {} with kit type: {}", ourBotUUID, kitType);
-            PracticeAI.INSTANCE.configureBotForKit(bot, kitType);
+            logger.info("Configuring combat AI for bot {} with kit type {} at difficulty {}", ourBotUUID, kitType,
+                    difficulty.getId());
+            PracticeAI.INSTANCE.configureBotForKit(bot, kitType, difficulty);
             logger.info("Combat systems activated for bot {}", ourBotUUID);
         } catch (Exception e) {
             logger.error("Failed to parse BotDuelStarted message", e);
@@ -414,7 +448,14 @@ public class VelocityBotManager {
             logger.error("Failed to parse BotDisconnect message", e);
         }
     }
-    private void createAndConnectBot(UUID playerUUID, String serverName, String kitType, int retryCount) {
+    private void createAndConnectBot(
+            UUID playerUUID,
+            String serverName,
+            String kitType,
+            BotDifficulty difficulty,
+            String requestToken,
+            int retryCount
+    ) {
         server.getScheduler().buildTask(plugin, () -> {
             try {
                 // Get Server Info
@@ -428,7 +469,7 @@ public class VelocityBotManager {
                 BotConfiguration config = new BotConfiguration();
                 UUID botUUID = UUID.randomUUID();
 
-                String botUsername = generateUniqueBotUsername(kitType);
+                String botUsername = generateUniqueBotUsername(kitType, requestToken);
                 if (retryCount > 0) {
                     logger.info("Retrying with new bot name: {} (Retry #{})", botUsername, retryCount);
                 }
@@ -436,13 +477,7 @@ public class VelocityBotManager {
                 config.setUuid(botUUID);
                 config.setUsername(botUsername);
                 config.setDebug(false);
-
-                // ===== Bot CPS tuning =====
-                // If you want to change attack speed, modify these two values:
-                // averageCps: base clicks-per-second
-                // cpsDeviation: random fluctuation range around averageCps
-                config.setAverageCps(10.0f);
-                config.setCpsDeviation(1.0f);
+                difficulty.applyTo(config);
 
                 // Create ClientInstance
                 File runDir = new File("bot-run/" + config.getUuid());
@@ -466,11 +501,14 @@ public class VelocityBotManager {
                 activeBots.put(botUUID, bot);
                 botTargets.put(botUUID, playerUUID);
                 kitTypes.put(botUUID, kitType);
+                botDifficulties.put(botUUID, difficulty);
+                botRequestTokens.put(botUUID, requestToken);
                 botsByUsername.put(config.getUsername(), botUUID);
                 botLoopGuards.put(botUUID, new AtomicBoolean(false));
 
                 // Initialize
-                logger.info("Starting bot instance for {} (UUID: {})", config.getUsername(), botUUID);
+                logger.info("Starting bot instance for {} (UUID: {}, Difficulty: {}, Token: {})",
+                        config.getUsername(), botUUID, difficulty.getId(), requestToken);
 
                 bot.run();
 
@@ -478,8 +516,9 @@ public class VelocityBotManager {
                 server.getScheduler().buildTask(plugin, () -> {
                     try {
                         if (bot.isRunning()) {
-                            logger.info("Configuring PracticeAI for bot {} with kit type: {}", botUUID, kitType);
-                            PracticeAI.INSTANCE.configureBotForKit(bot, kitType);
+                            logger.info("Configuring PracticeAI for bot {} with kit type {} at difficulty {}",
+                                    botUUID, kitType, difficulty.getId());
+                            PracticeAI.INSTANCE.configureBotForKit(bot, kitType, difficulty);
                             logger.info("PracticeAI configured successfully for bot {}", botUUID);
                         }
                     } catch (Exception e) {
@@ -503,8 +542,8 @@ public class VelocityBotManager {
                                     return;
                                 }
 
-                                if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, retryCount,
-                                        finalBotUsername)) {
+                                if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
+                                        requestToken, retryCount, finalBotUsername)) {
                                     return;
                                 }
 
@@ -544,15 +583,16 @@ public class VelocityBotManager {
                                                     timeoutLike ? "read timeout" : "chat crash",
                                                     retryCount + 1);
                                             server.getScheduler().buildTask(plugin, () ->
-                                                    createAndConnectBot(playerUUID, serverName, kitType, retryCount + 1)
+                                                    createAndConnectBot(playerUUID, serverName, kitType, difficulty,
+                                                            requestToken, retryCount + 1)
                                             ).delay(1200, TimeUnit.MILLISECONDS).schedule();
                                         }
                                         return;
                                     }
                                 }
 
-                                handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, retryCount,
-                                        finalBotUsername);
+                                handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
+                                        requestToken, retryCount, finalBotUsername);
                             } finally {
                                 loopGuard.set(false);
                             }
@@ -565,21 +605,18 @@ public class VelocityBotManager {
         }).schedule();
     }
 
-    private String generateUniqueBotUsername(String kitType) {
-        String username;
-        do {
-            username = kitType + generateRandomSuffix(3);
-        } while (botsByUsername.containsKey(username));
-        return username;
-    }
-
-    private String generateRandomSuffix(int length) {
-        StringBuilder sb = new StringBuilder(length);
-        Random random = new Random();
-        for (int i = 0; i < length; i++) {
-            sb.append(BOT_NAME_CHARS.charAt(random.nextInt(BOT_NAME_CHARS.length())));
+    private String generateUniqueBotUsername(String kitType, String requestToken) {
+        String sanitizedKit = kitType == null ? "Bot" : kitType.replaceAll("[^A-Za-z0-9]", "");
+        if (sanitizedKit.isEmpty()) {
+            sanitizedKit = "Bot";
         }
-        return sb.toString();
+
+        String token = requestToken == null ? "BOT0" : requestToken.toUpperCase(Locale.ROOT);
+        int maxPrefixLength = Math.max(1, 16 - token.length());
+        String prefix = sanitizedKit.length() > maxPrefixLength
+                ? sanitizedKit.substring(0, maxPrefixLength)
+                : sanitizedKit;
+        return prefix + token;
     }
 
     @Subscribe

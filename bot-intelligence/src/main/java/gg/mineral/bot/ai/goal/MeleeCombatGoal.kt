@@ -375,7 +375,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
         val fakePlayer = clientInstance.fakePlayer
         val distance = fakePlayer.distance3DTo(target)
-        if (!fakePlayer.isOnGround || distance > 2.95 /*
+        if (!fakePlayer.isOnGround || distance > clientInstance.configuration.strafeActivationRange /*
                                                          * || timeMillis() -
                                                          * fakePlayer.
                                                          * getLastHitSelected
