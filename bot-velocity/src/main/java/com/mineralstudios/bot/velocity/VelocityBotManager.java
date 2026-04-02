@@ -30,6 +30,7 @@ public class VelocityBotManager {
     private final Object plugin;
     private final ProxyServer server;
     private final Logger logger;
+    private final boolean guideEnabled;
 
     private static final String SUB_CHANNEL_BOT_DUEL = "BotDuel";
     private static final String SUB_CHANNEL_BOT_DUEL_STARTED = "BotDuelStarted";
@@ -114,12 +115,13 @@ public class VelocityBotManager {
     // Track server-assigned UUID to our UUID: Server UUID -> Our Bot UUID
     private final Map<UUID, UUID> serverUuidToOurUuid = new ConcurrentHashMap<>();
 
-    public VelocityBotManager(Object plugin, ProxyServer server, Logger logger) {
+    public VelocityBotManager(Object plugin, ProxyServer server, Logger logger, boolean guideEnabled) {
         this.plugin = plugin;
         this.server = server;
         this.logger = logger;
+        this.guideEnabled = guideEnabled;
 
-        logger.info("VelocityBotManager initialized (Guide Dog mode)");
+        logger.info("VelocityBotManager initialized (guide-enabled={})", guideEnabled);
     }
 
     /**
@@ -349,7 +351,9 @@ public class VelocityBotManager {
                 handleBotDisconnect(in);
                 break;
             case SUB_CHANNEL_BOT_GUIDE:
-                handleBotGuide(in);
+                if (guideEnabled) {
+                    handleBotGuide(in);
+                }
                 break;
             default:
                 logger.info("Ignored subchannel: {}", subChannel);

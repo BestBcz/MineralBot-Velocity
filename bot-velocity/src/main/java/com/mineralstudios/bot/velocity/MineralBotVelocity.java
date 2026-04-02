@@ -13,6 +13,13 @@ import com.github.retrooper.packetevents.event.PacketListenerPriority;
 import io.github.retrooper.packetevents.velocity.factory.VelocityPacketEventsBuilder;
 import org.slf4j.Logger;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Properties;
+
 @Plugin(id = "bot-velocity", name = "MineralBotVelocity", version = "1.0-SNAPSHOT", description = "Mineral-Bot integration for Velocity", authors = {
         "MineralStudios" })
 public class MineralBotVelocity {
@@ -51,9 +58,41 @@ public class MineralBotVelocity {
         server.getChannelRegistrar().register(PLUGIN_CHANNEL);
         server.getChannelRegistrar().register(new LegacyChannelIdentifier("MineralBot"));
 
-        // Register Event Listener
-        server.getEventManager().register(this, new VelocityBotManager(this, server, logger));
+        boolean guideEnabled = loadGuideEnabled();
 
-        logger.info("MineralBotVelocity has been initialized!");
+        // Register Event Listener
+        server.getEventManager().register(this, new VelocityBotManager(this, server, logger, guideEnabled));
+
+        logger.info("MineralBotVelocity has been initialized! guide-enabled={}", guideEnabled);
+    }
+
+    private boolean loadGuideEnabled() {
+        Path configPath = dataDirectory.resolve("config.properties");
+        Properties properties = new Properties();
+
+        try {
+            Files.createDirectories(dataDirectory);
+
+            if (Files.exists(configPath)) {
+                try (InputStream input = Files.newInputStream(configPath)) {
+                    properties.load(input);
+                }
+            }
+
+            boolean hasGuideSetting = properties.getProperty("guide-enabled") != null;
+            boolean guideEnabled = Boolean.parseBoolean(properties.getProperty("guide-enabled", "true"));
+
+            if (!Files.exists(configPath) || !hasGuideSetting) {
+                properties.setProperty("guide-enabled", Boolean.toString(guideEnabled));
+                try (OutputStream output = Files.newOutputStream(configPath)) {
+                    properties.store(output, "MineralBotVelocity configuration");
+                }
+            }
+
+            return guideEnabled;
+        } catch (IOException e) {
+            logger.error("Failed to load bot-velocity config from {}", configPath, e);
+            return true;
+        }
     }
 }
