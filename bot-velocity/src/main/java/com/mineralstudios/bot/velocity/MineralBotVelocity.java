@@ -8,8 +8,6 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.LegacyChannelIdentifier;
 import com.github.retrooper.packetevents.PacketEvents;
-import com.github.retrooper.packetevents.event.PacketListenerAbstract;
-import com.github.retrooper.packetevents.event.PacketListenerPriority;
 import io.github.retrooper.packetevents.velocity.factory.VelocityPacketEventsBuilder;
 import org.slf4j.Logger;
 
@@ -31,6 +29,7 @@ public class MineralBotVelocity {
 
     public static final MinecraftChannelIdentifier PLUGIN_CHANNEL = MinecraftChannelIdentifier.create("bungeecord",
             "main");
+    public static final LegacyChannelIdentifier MINERAL_BOT_CHANNEL = new LegacyChannelIdentifier("MineralBot");
 
     @Inject
     public MineralBotVelocity(ProxyServer server, Logger logger,
@@ -48,7 +47,6 @@ public class MineralBotVelocity {
         PacketEvents.setAPI(VelocityPacketEventsBuilder.build(server, pluginContainer, logger, dataDirectory));
         PacketEvents.getAPI().getSettings().checkForUpdates(false);
         PacketEvents.getAPI().load();
-        PacketEvents.getAPI().load();
         PacketEvents.getAPI().init();
 
         // Initialize Mineral Bot API
@@ -56,12 +54,15 @@ public class MineralBotVelocity {
 
         // Register Plugin Message Channel
         server.getChannelRegistrar().register(PLUGIN_CHANNEL);
-        server.getChannelRegistrar().register(new LegacyChannelIdentifier("MineralBot"));
+        server.getChannelRegistrar().register(MINERAL_BOT_CHANNEL);
 
         boolean guideEnabled = loadGuideEnabled();
 
-        // Register Event Listener
-        server.getEventManager().register(this, new VelocityBotManager(this, server, logger, guideEnabled));
+        VelocityBotManager botManager = new VelocityBotManager(this, server, logger, guideEnabled);
+
+        // Register Velocity and PacketEvents listeners
+        server.getEventManager().register(this, botManager);
+        PacketEvents.getAPI().getEventManager().registerListener(new BotPacketDiagnosticsListener(botManager));
 
         logger.info("MineralBotVelocity has been initialized! guide-enabled={}", guideEnabled);
     }

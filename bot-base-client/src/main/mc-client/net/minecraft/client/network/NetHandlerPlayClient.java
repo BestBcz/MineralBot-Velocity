@@ -136,6 +136,23 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
     private boolean doneLoadingTerrain;
     private boolean field_147308_k = false;
 
+    private void recordClientboundPacket(String packetKey) {
+        if (this.gameController instanceof ClientInstance instance) {
+            instance.recordClientboundPacket(packetKey);
+        }
+    }
+
+    private void recordClientboundPacket(String packetKey, Entity entity) {
+        if (entity == null) {
+            recordClientboundPacket(packetKey);
+            return;
+        }
+
+        if (this.gameController instanceof ClientInstance instance) {
+            instance.recordClientboundPacket(packetKey, entity.getEntityId(), entity.getUniqueID());
+        }
+    }
+
     public NetHandlerPlayClient(Minecraft p_i45061_1_, GuiScreen p_i45061_2_, NetworkManager p_i45061_3_) {
         this.gameController = p_i45061_1_;
         this.guiScreenServer = p_i45061_2_;
@@ -354,6 +371,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         if (var2 != null) {
             var2.setVelocity((double) p_147244_1_.func_149411_d() / 8000.0D,
                     (double) p_147244_1_.func_149410_e() / 8000.0D, (double) p_147244_1_.func_149409_f() / 8000.0D);
+            recordClientboundPacket("ENTITY_VELOCITY", var2);
         }
     }
 
@@ -367,6 +385,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
 
         if (var2 != null && p_147284_1_.func_149376_c() != null) {
             var2.getDataWatcher().updateWatchedObjectsFromList(p_147284_1_.func_149376_c());
+            recordClientboundPacket("ENTITY_METADATA", var2);
         }
     }
 
@@ -401,6 +420,8 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         if (var13 != null) {
             var11.getDataWatcher().updateWatchedObjectsFromList(var13);
         }
+
+        recordClientboundPacket("SPAWN_PLAYER", var11);
     }
 
     /**
@@ -419,6 +440,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
             float var9 = (float) (p_147275_1_.func_149450_g() * 360) / 256.0F;
             float var10 = (float) (p_147275_1_.func_149447_h() * 360) / 256.0F;
             var2.setPositionAndRotation2(var3, var5, var7, var9, var10, 3);
+            recordClientboundPacket("ENTITY_MOVEMENT", var2);
         }
     }
 
@@ -453,6 +475,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
             float var10 = p_147259_1_.func_149060_h() ? (float) (p_147259_1_.func_149063_g() * 360) / 256.0F
                     : var2.rotationPitch;
             var2.setPositionAndRotation2(var3, var5, var7, var9, var10, 3);
+            recordClientboundPacket("ENTITY_MOVEMENT", var2);
         }
     }
 
@@ -467,6 +490,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         if (var2 != null) {
             float var3 = (float) (p_147267_1_.func_149380_c() * 360) / 256.0F;
             var2.setRotationYawHead(var3);
+            recordClientboundPacket("ENTITY_MOVEMENT", var2);
         }
     }
 
@@ -485,6 +509,8 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
 
             if (entity == null)
                 continue;
+
+            recordClientboundPacket("DESTROY_ENTITIES", entity);
 
             val event = new EntityDestroyEvent(entity);
             if (this.gameController instanceof ClientInstance instance)
@@ -506,6 +532,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         double var7 = p_147258_1_.func_148933_e();
         float var9 = p_147258_1_.func_148931_f();
         float var10 = p_147258_1_.func_148930_g();
+        recordClientboundPacket("PLAYER_POS_LOOK");
         if (thePlayer != null) {
             thePlayer.ySize = 0.0F;
             thePlayer.motionX = thePlayer.motionY = thePlayer.motionZ = 0.0D;
@@ -841,6 +868,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         EntityClientPlayerMP thePlayer = this.gameController.thePlayer;
 
         if (thePlayer != null) {
+            recordClientboundPacket("UPDATE_HEALTH");
             val healthUpdateEvent = new EntityHealthUpdateEvent(p_147249_1_.func_149332_c());
             if (this.gameController instanceof ClientInstance instance && instance.callEvent(healthUpdateEvent))
                 return;
@@ -1027,6 +1055,8 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         if (var2 == null)
             return;
 
+        recordClientboundPacket("SET_SLOT");
+
         if (p_147266_1_.func_149175_c() == -1) {
             var2.inventory.setItemStack(p_147266_1_.func_149174_e());
         } else {
@@ -1084,6 +1114,8 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
 
         if (var2 == null)
             return;
+
+        recordClientboundPacket("WINDOW_ITEMS");
 
         if (p_147241_1_.func_148911_c() == 0) {
             var2.inventoryContainer.putStacksInSlots(p_147241_1_.func_148910_d());

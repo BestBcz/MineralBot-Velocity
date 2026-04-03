@@ -1,9 +1,11 @@
 package com.mineralstudios.bot.velocity;
 
 import com.google.common.io.ByteArrayDataInput;
+import com.google.common.io.ByteArrayDataOutput;
 import com.google.common.io.ByteStreams;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
+import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import org.slf4j.Logger;
@@ -16,8 +18,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.io.File;
 
 import gg.mineral.bot.base.client.instance.ClientInstance;
+import gg.mineral.bot.api.entity.ClientEntity;
 import gg.mineral.bot.api.configuration.BotDifficulty;
 import gg.mineral.bot.api.configuration.BotConfiguration;
+import gg.mineral.bot.api.entity.living.player.ClientPlayer;
 import gg.mineral.bot.ai.goal.practice.PracticeAI;
 import com.google.common.collect.ArrayListMultimap;
 import java.net.Proxy;
@@ -36,6 +40,8 @@ public class VelocityBotManager {
     private static final String SUB_CHANNEL_BOT_DUEL_STARTED = "BotDuelStarted";
     private static final String SUB_CHANNEL_BOT_DISCONNECT = "BotDisconnect";
     private static final String SUB_CHANNEL_BOT_GUIDE = "BotGuide";
+    private static final String SUB_CHANNEL_BOT_DUEL_FAILED = "BotDuelFailed";
+    private static final String SUB_CHANNEL_BOT_REPAIR_MATCH_ENTITIES = "BotRepairMatchEntities";
 
     // Track active bots: Bot UUID -> ClientInstance
     private final Map<UUID, ClientInstance> activeBots = new ConcurrentHashMap<>();
@@ -115,6 +121,9 @@ public class VelocityBotManager {
     // Track server-assigned UUID to our UUID: Server UUID -> Our Bot UUID
     private final Map<UUID, UUID> serverUuidToOurUuid = new ConcurrentHashMap<>();
 
+    // Track diagnostics: Bot UUID -> diagnostics snapshot/state
+    private final Map<UUID, BotSessionDiagnostics> botDiagnostics = new ConcurrentHashMap<>();
+
     public VelocityBotManager(Object plugin, ProxyServer server, Logger logger, boolean guideEnabled) {
         this.plugin = plugin;
         this.server = server;
@@ -122,6 +131,142 @@ public class VelocityBotManager {
         this.guideEnabled = guideEnabled;
 
         logger.info("VelocityBotManager initialized (guide-enabled={})", guideEnabled);
+    }
+
+    void recordProxyPacket(String botUsername, String packetKey) {
+        if (botUsername == null || packetKey == null) {
+            return;
+        }
+
+        UUID botUuid = botsByUsername.get(botUsername);
+        if (botUuid == null) {
+            return;
+        }
+
+        recordBotPacket(botUuid, packetKey, Integer.MIN_VALUE, null);
+    }
+
+    private void recordBotPacket(UUID botUuid, String packetKey, int entityId, UUID entityUuid) {
+        BotSessionDiagnostics diagnostics = botDiagnostics.get(botUuid);
+        if (diagnostics == null || packetKey == null) {
+            return;
+        }
+
+        diagnostics.markPacket(packetKey, entityId, entityUuid);
+    }
+
+    private BotSessionDiagnostics getDiagnostics(UUID botUuid) {
+        return botDiagnostics.get(botUuid);
+    }
+
+    private void sendPluginMessageToPlayerServer(UUID playerUuid, byte[] payload) {
+        server.getPlayer(playerUuid)
+                .flatMap(Player::getCurrentServer)
+                .ifPresentOrElse(
+                        connection -> connection.getServer()
+                                .sendPluginMessage(MineralBotVelocity.MINERAL_BOT_CHANNEL, payload),
+                        () -> logger.warn("Unable to send MineralBot plugin message. Player {} is not on a backend server.",
+                                playerUuid)
+                );
+    }
+
+    private void notifyBotDuelFailed(BotSessionDiagnostics diagnostics, String reason, String detail) {
+        if (diagnostics == null || diagnostics.isDuelStarted() || !diagnostics.markFailureReported()) {
+            return;
+        }
+
+        ByteArrayDataOutput out = ByteStreams.newDataOutput();
+        out.writeUTF(SUB_CHANNEL_BOT_DUEL_FAILED);
+        out.writeUTF(diagnostics.getPlayerUuid().toString());
+        out.writeUTF(diagnostics.getRequestToken() == null ? "" : diagnostics.getRequestToken());
+        out.writeUTF(reason == null ? "unknown" : reason);
+        out.writeUTF(detail == null ? "" : detail);
+        sendPluginMessageToPlayerServer(diagnostics.getPlayerUuid(), out.toByteArray());
+    }
+
+    private void requestEntityRepair(BotSessionDiagnostics diagnostics, String reason) {
+        if (diagnostics == null || !diagnostics.isDuelStarted()) {
+            return;
+        }
+
+        ByteArrayDataOutput out = ByteStreams.newDataOutput();
+        out.writeUTF(SUB_CHANNEL_BOT_REPAIR_MATCH_ENTITIES);
+        out.writeUTF(diagnostics.getPlayerUuid().toString());
+        out.writeUTF(diagnostics.getRequestToken() == null ? "" : diagnostics.getRequestToken());
+        out.writeUTF(reason == null ? "unknown" : reason);
+        sendPluginMessageToPlayerServer(diagnostics.getPlayerUuid(), out.toByteArray());
+    }
+
+    private boolean runStartupWatchdog(UUID botUuid) {
+        BotSessionDiagnostics diagnostics = getDiagnostics(botUuid);
+        if (diagnostics == null) {
+            return false;
+        }
+
+        long now = System.currentTimeMillis();
+
+        if (diagnostics.shouldWarnStartup(now)) {
+            diagnostics.markStartupWarningLogged();
+            logger.warn("Bot startup missing packets. {}", diagnostics.startupSummary());
+        }
+
+        if (!diagnostics.shouldFailStartup(now)) {
+            return false;
+        }
+
+        logger.error("Bot startup timed out before duel start. {}", diagnostics.startupSummary());
+        notifyBotDuelFailed(diagnostics, "startup-timeout",
+                "Bot did not finish startup before timeout.");
+        cleanupBot(botUuid, null, true);
+        return true;
+    }
+
+    private void runTargetWatchdog(UUID botUuid, ClientInstance bot) {
+        BotSessionDiagnostics diagnostics = getDiagnostics(botUuid);
+        if (diagnostics == null || !diagnostics.isDuelStarted()) {
+            return;
+        }
+
+        UUID expectedTargetUuid = botTargets.get(botUuid);
+        if (expectedTargetUuid == null) {
+            return;
+        }
+
+        diagnostics.setExpectedTargetUuid(expectedTargetUuid);
+
+        ClientPlayer target = findTargetPlayer(bot, expectedTargetUuid);
+        if (target != null) {
+            diagnostics.noteTargetSeen(target.getEntityId());
+            return;
+        }
+
+        diagnostics.noteTargetMissingTick();
+
+        if (diagnostics.shouldLogTargetLoss()) {
+            diagnostics.markTargetLossLogged();
+            logger.warn("Bot lost its target entity. {}", diagnostics.targetSummary(false));
+        }
+
+        long now = System.currentTimeMillis();
+        if (diagnostics.shouldRequestRepair(now)) {
+            diagnostics.markRepairRequested(now);
+            logger.warn("Requesting bot match entity repair. {}", diagnostics.targetSummary(false));
+            requestEntityRepair(diagnostics, "missing-target");
+        }
+    }
+
+    private ClientPlayer findTargetPlayer(ClientInstance bot, UUID targetUuid) {
+        if (bot == null || targetUuid == null) {
+            return null;
+        }
+
+        for (ClientEntity entity : bot.getFakePlayer().getWorld().getEntities()) {
+            if (targetUuid.equals(entity.getUuid()) && entity instanceof ClientPlayer player) {
+                return player;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -240,6 +385,7 @@ public class VelocityBotManager {
         kitTypes.remove(ourBotUUID);
         botDifficulties.remove(ourBotUUID);
         botRequestTokens.remove(ourBotUUID);
+        botDiagnostics.remove(ourBotUUID);
 
         if (serverBotUUID != null) {
             serverUuidToOurUuid.remove(serverBotUUID);
@@ -264,6 +410,7 @@ public class VelocityBotManager {
 
         try {
             File runDir = bot.mcDataDir;
+            bot.setPacketDiagnosticsListener(null);
             bot.shutdown();
 
             if (runDir != null && runDir.exists()) {
@@ -295,6 +442,11 @@ public class VelocityBotManager {
             return false;
         }
 
+        BotSessionDiagnostics diagnostics = getDiagnostics(ourBotUUID);
+        if (diagnostics != null) {
+            diagnostics.noteDisconnect(disconnectText);
+        }
+
         logger.warn("Bot {} disconnected: {}", botUsername, disconnectText);
         boolean frequentKick = isFrequentConnectionKick(disconnectText);
         boolean timeoutLike = isTimeoutLike(disconnectText);
@@ -311,6 +463,9 @@ public class VelocityBotManager {
             server.getScheduler().buildTask(plugin, () ->
                     createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, retryCount + 1)
             ).delay(1200, TimeUnit.MILLISECONDS).schedule();
+        } else if (diagnostics != null && !diagnostics.isDuelStarted()) {
+            String reason = frequentKick ? "frequent-connection-kick" : timeoutLike ? "read-timeout" : "bot-disconnected";
+            notifyBotDuelFailed(diagnostics, reason, disconnectText);
         }
 
         return true;
@@ -420,6 +575,11 @@ public class VelocityBotManager {
                 return;
             }
 
+            BotSessionDiagnostics diagnostics = getDiagnostics(ourBotUUID);
+            if (diagnostics != null) {
+                diagnostics.markDuelStarted(playerUUID);
+            }
+
             botTargets.put(ourBotUUID, playerUUID);
             kitTypes.put(ourBotUUID, kitType);
             botDifficulties.put(ourBotUUID, difficulty);
@@ -461,19 +621,24 @@ public class VelocityBotManager {
             int retryCount
     ) {
         server.getScheduler().buildTask(plugin, () -> {
+            UUID botUUID = UUID.randomUUID();
+            String botUsername = generateUniqueBotUsername(kitType, requestToken);
+            BotSessionDiagnostics diagnostics =
+                    new BotSessionDiagnostics(playerUUID, botUUID, botUsername, requestToken, retryCount);
+
             try {
                 // Get Server Info
                 var serverInfo = server.getServer(serverName).orElse(null);
                 if (serverInfo == null) {
                     logger.error("Server {} not found", serverName);
+                    notifyBotDuelFailed(diagnostics, "server-not-found",
+                            "Backend server " + serverName + " is not registered on the proxy.");
                     return;
                 }
 
                 // Configure Bot
                 BotConfiguration config = new BotConfiguration();
-                UUID botUUID = UUID.randomUUID();
 
-                String botUsername = generateUniqueBotUsername(kitType, requestToken);
                 if (retryCount > 0) {
                     logger.info("Retrying with new bot name: {} (Retry #{})", botUsername, retryCount);
                 }
@@ -498,6 +663,9 @@ public class VelocityBotManager {
                         ArrayListMultimap.create(),
                         "1.7.10");
 
+                bot.setPacketDiagnosticsListener((packetKey, entityId, entityUuid) ->
+                        recordBotPacket(botUUID, packetKey, entityId, entityUuid));
+
                 // Set Connection Info - connect to proxy
                 bot.setServer("127.0.0.1", 25566);
 
@@ -507,6 +675,7 @@ public class VelocityBotManager {
                 kitTypes.put(botUUID, kitType);
                 botDifficulties.put(botUUID, difficulty);
                 botRequestTokens.put(botUUID, requestToken);
+                botDiagnostics.put(botUUID, diagnostics);
                 botsByUsername.put(config.getUsername(), botUUID);
                 botLoopGuards.put(botUUID, new AtomicBoolean(false));
 
@@ -551,6 +720,10 @@ public class VelocityBotManager {
                                     return;
                                 }
 
+                                if (runStartupWatchdog(botUUID)) {
+                                    return;
+                                }
+
                                 try {
                                     bot.runGameLoop();
                                 } catch (Exception e) {
@@ -580,6 +753,10 @@ public class VelocityBotManager {
                                     }
 
                                     if (timeoutLike || chatCrash) {
+                                        BotSessionDiagnostics currentDiagnostics = getDiagnostics(botUUID);
+                                        if (currentDiagnostics != null) {
+                                            currentDiagnostics.noteDisconnect(e.toString());
+                                        }
                                         cleanupBot(botUUID, null, true);
                                         if (retryCount < 3) {
                                             logger.warn("Bot {} hit {}, recreating (retry #{})",
@@ -590,13 +767,21 @@ public class VelocityBotManager {
                                                     createAndConnectBot(playerUUID, serverName, kitType, difficulty,
                                                             requestToken, retryCount + 1)
                                             ).delay(1200, TimeUnit.MILLISECONDS).schedule();
+                                        } else if (currentDiagnostics != null && !currentDiagnostics.isDuelStarted()) {
+                                            notifyBotDuelFailed(currentDiagnostics,
+                                                    timeoutLike ? "read-timeout" : "chat-crash",
+                                                    e.toString());
                                         }
                                         return;
                                     }
                                 }
 
-                                handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
-                                        requestToken, retryCount, finalBotUsername);
+                                if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
+                                        requestToken, retryCount, finalBotUsername)) {
+                                    return;
+                                }
+
+                                runTargetWatchdog(botUUID, bot);
                             } finally {
                                 loopGuard.set(false);
                             }
@@ -605,6 +790,8 @@ public class VelocityBotManager {
 
             } catch (Exception e) {
                 logger.error("Failed to start bot", e);
+                notifyBotDuelFailed(diagnostics, "create-failed", e.toString());
+                cleanupBot(botUUID, null, true);
             }
         }).schedule();
     }
