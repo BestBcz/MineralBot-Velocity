@@ -75,6 +75,7 @@ open class ClientInstance(
     // Guide-created ghost targets so we can clean them up when real server entities exist.
     private val guideTargetEntityIds = mutableMapOf<UUID, Int>()
     private val pendingGuideUpdate = AtomicReference<GuideUpdate?>()
+    var packetDiagnosticsListener: PacketDiagnosticsListener? = null
 
     override var latency: Int = 0
 
@@ -125,6 +126,12 @@ open class ClientInstance(
             val tHealth: Float,
             val tBlocking: Boolean
     )
+
+    @JvmOverloads
+    fun recordClientboundPacket(packetKey: String, entityId: Int = Int.MIN_VALUE, entityUuid: UUID? = null) {
+        packetDiagnosticsListener?.onClientboundPacket(packetKey, entityId, entityUuid)
+    }
+
     /**
      * Schedules a task to run after a delay. If called on the main thread with zero delay and no
      * queued tasks, the task executes immediately.
