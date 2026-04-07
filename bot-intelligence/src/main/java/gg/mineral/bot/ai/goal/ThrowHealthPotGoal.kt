@@ -10,6 +10,7 @@ import gg.mineral.bot.api.entity.throwable.ClientPotion
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.event.entity.EntityDestroyEvent
 import gg.mineral.bot.api.event.entity.EntityHurtEvent
+import gg.mineral.bot.api.goal.GoalDebugState
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
@@ -29,7 +30,7 @@ import org.apache.commons.math3.optim.univariate.SearchInterval
 import org.apache.commons.math3.optim.univariate.UnivariateObjectiveFunction
 import org.apache.commons.math3.stat.regression.SimpleRegression
 
-class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound {
+class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
     override val maxDuration: Long = 100
     override var startTime: Long = 0
     override var executing: Boolean = false
@@ -403,6 +404,11 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     override fun blocksContinuousAttack(): Boolean = currentState != PotState.COOLDOWN
 
     override fun blocksContinuousMovement(): Boolean = currentState != PotState.COOLDOWN
+
+    override fun debugSummary(): String {
+        return "state=$currentState,stateTicks=${clientInstance.currentTick - stateStartTick},lastPotAgo=${clientInstance.currentTick - lastPotTick},thrownPotionId=${thrownPotionId ?: -1},splashApplied=$splashApplied,damagedAfterThrow=$damagedAfterThrow,potionGoneTick=$potionGoneTick"
+    }
+
     override fun onEnd() {
         if (clientInstance.currentScreen is ContainerScreen)
             pressKey(10, Key.Type.KEY_ESCAPE)

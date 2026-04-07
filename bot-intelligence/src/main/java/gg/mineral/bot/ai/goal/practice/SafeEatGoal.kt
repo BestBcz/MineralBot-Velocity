@@ -7,6 +7,7 @@ import gg.mineral.bot.api.entity.living.ClientLivingEntity
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.event.entity.EntityHurtEvent
 import gg.mineral.bot.api.event.peripherals.MouseButtonEvent
+import gg.mineral.bot.api.goal.GoalDebugState
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
@@ -25,7 +26,7 @@ import gg.mineral.bot.api.screen.type.ContainerScreen
  * - Cancel eating to block/attack if combo detected
  */
 class SafeEatGoal(clientInstance: ClientInstance) :
-        InventoryGoal(clientInstance), Sporadic, Timebound {
+        InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val maxDuration: Long = 120
@@ -50,7 +51,7 @@ class SafeEatGoal(clientInstance: ClientInstance) :
         val distance = distanceAwayFromEnemies()
         val healthCritical = fakePlayer.health < 8
 
-        return (distance > 8.0 || healthCritical) && fakePlayer.health > 10
+        return (distance > 8.0 && fakePlayer.health > 10) || healthCritical
     }
 
     override fun onStart() {
@@ -171,6 +172,13 @@ class SafeEatGoal(clientInstance: ClientInstance) :
     override fun blocksContinuousAttack(): Boolean = true
 
     override fun blocksContinuousMovement(): Boolean = true
+
+    override fun debugSummary(): String {
+        val heldItem = clientInstance.fakePlayer.inventory.heldItemStack?.let { "${it.item.id}:${it.durability}x${it.count}" } ?: "empty"
+        val eatingTicks = if (eating) clientInstance.currentTick - eatingStartTick else 0
+        return "eating=$eating,eatingTicks=$eatingTicks,hitsTaken=$hitsTaken,comboDetected=$comboDetected,lastEatAgo=${clientInstance.currentTick - lastEatTick},distance=${distanceAwayFromEnemies()},held=$heldItem"
+    }
+
     override fun onEnd() {
         eating = false
         comboDetected = false
