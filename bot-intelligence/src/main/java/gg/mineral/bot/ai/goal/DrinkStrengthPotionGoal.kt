@@ -8,6 +8,7 @@ import gg.mineral.bot.api.entity.living.ClientLivingEntity
 import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.event.peripherals.MouseButtonEvent
+import gg.mineral.bot.api.goal.GoalDebugState
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
@@ -16,7 +17,7 @@ import gg.mineral.bot.api.inv.item.ItemStack
 import gg.mineral.bot.api.inv.potion.Potion
 import gg.mineral.bot.api.screen.type.ContainerScreen
 
-class DrinkStrengthPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound {
+class DrinkStrengthPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val maxDuration: Long = 100
@@ -150,6 +151,12 @@ class DrinkStrengthPotionGoal(clientInstance: ClientInstance) : InventoryGoal(cl
     override fun blocksContinuousAttack(): Boolean = true
 
     override fun blocksContinuousMovement(): Boolean = true
+
+    override fun debugSummary(): String {
+        val heldItem = clientInstance.fakePlayer.inventory.heldItemStack?.let { "${it.item.id}:${it.durability}x${it.count}" } ?: "empty"
+        return "drinking=$drinking,hasStrengthEffect=${hasStrengthEffect()},hasStrengthPotion=${hasStrengthPotion()},held=$heldItem"
+    }
+
     override fun onEnd() {
         drinking = false
         unpressButton(MouseButton.Type.RIGHT_CLICK)

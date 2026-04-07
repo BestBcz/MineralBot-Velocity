@@ -5,9 +5,11 @@ import gg.mineral.bot.api.configuration.BotConfiguration
 import gg.mineral.bot.api.controls.Keyboard
 import gg.mineral.bot.api.controls.Mouse
 import gg.mineral.bot.api.entity.ClientEntity
+import gg.mineral.bot.api.entity.living.ClientLivingEntity
 import gg.mineral.bot.api.entity.living.player.FakePlayer
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.goal.Goal
+import gg.mineral.bot.api.goal.GoalDebugState
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.Inventory
@@ -80,6 +82,9 @@ open class ClientInstance(
     override var latency: Int = 0
 
     override var currentTick: Int = 0
+    private var foregroundGoalName: String? = null
+    private var foregroundGoalStartTick = -1
+    private var lastForegroundGoalWarnTick = -200
 
     override val keyboard: Keyboard
         get() = super.keyboard
@@ -180,6 +185,99 @@ open class ClientInstance(
         return null
     }
 
+    private fun observeForegroundGoalDiagnostics() {
+        val goal = activeSporadicGoal()
+        val goalName = goal?.javaClass?.simpleName
+
+        if (goalName != foregroundGoalName) {
+            foregroundGoalName = goalName
+            foregroundGoalStartTick = if (goal != null) currentTick else -1
+            lastForegroundGoalWarnTick = -200
+        }
+
+        if (goal == null || foregroundGoalStartTick == -1) {
+            return
+        }
+
+        val blocksControl = blocksContinuousAim || blocksContinuousAttack || blocksContinuousMovement
+        val activeTicks = currentTick - foregroundGoalStartTick
+        if (!blocksControl || activeTicks < FOREGROUND_GOAL_WARN_TICKS) {
+            return
+        }
+
+        if (currentTick - lastForegroundGoalWarnTick < FOREGROUND_GOAL_WARN_INTERVAL_TICKS) {
+            return
+        }
+        lastForegroundGoalWarnTick = currentTick
+
+        val fakePlayer = fakePlayer
+        val inventory = fakePlayer.inventory
+        val heldItem = inventory.heldItemStack?.let { "${it.item.id}:${it.durability}x${it.count}" } ?: "empty"
+        val pressedKeys = pressedKeySummary()
+        val pressedButtons = pressedButtonSummary()
+        val debugSummary = (goal as? GoalDebugState)?.debugSummary() ?: "n/a"
+        val nearestEnemy = nearestEnemyDistance()?.let { formatDecimal(it) } ?: "none"
+
+        logger.warn(
+                "Foreground goal stall: goal={} activeTicks={} blocks=[inv:{},aim:{},atk:{},move:{}] health={} hunger={} held={} screen={} keys={} buttons={} nearestEnemy={} debug={}",
+                goalName,
+                activeTicks,
+                blocksContinuousInventory,
+                blocksContinuousAim,
+                blocksContinuousAttack,
+                blocksContinuousMovement,
+                formatDecimal(fakePlayer.health.toDouble()),
+                fakePlayer.hunger,
+                heldItem,
+                currentScreen?.javaClass?.simpleName ?: "none",
+                pressedKeys,
+                pressedButtons,
+                nearestEnemy,
+                debugSummary
+        )
+    }
+
+    private fun nearestEnemyDistance(): Double? {
+        val fakePlayer = fakePlayer
+        return fakePlayer.world.entities
+                .filterIsInstance<ClientLivingEntity>()
+                .filter {
+                    it.uuid != fakePlayer.uuid &&
+                            !configuration.friendlyUUIDs.contains(it.uuid)
+                }
+                .minOfOrNull { fakePlayer.distance3DTo(it) }
+    }
+
+    private fun pressedKeySummary(): String {
+        val keys =
+                listOf(
+                                gg.mineral.bot.api.controls.Key.Type.KEY_W,
+                                gg.mineral.bot.api.controls.Key.Type.KEY_A,
+                                gg.mineral.bot.api.controls.Key.Type.KEY_S,
+                                gg.mineral.bot.api.controls.Key.Type.KEY_D,
+                                gg.mineral.bot.api.controls.Key.Type.KEY_SPACE,
+                                gg.mineral.bot.api.controls.Key.Type.KEY_LCONTROL,
+                                gg.mineral.bot.api.controls.Key.Type.KEY_LSHIFT
+                        )
+                        .filter { keyboard.getKey(it)?.isPressed == true }
+                        .map { it.name.removePrefix("KEY_") }
+        return if (keys.isEmpty()) "none" else keys.joinToString(",")
+    }
+
+    private fun pressedButtonSummary(): String {
+        val buttons =
+                listOf(
+                                gg.mineral.bot.api.controls.MouseButton.Type.LEFT_CLICK,
+                                gg.mineral.bot.api.controls.MouseButton.Type.RIGHT_CLICK,
+                                gg.mineral.bot.api.controls.MouseButton.Type.MIDDLE_CLICK
+                        )
+                        .filter { mouse.getButton(it)?.isPressed == true }
+                        .map { it.name.removeSuffix("_CLICK") }
+        return if (buttons.isEmpty()) "none" else buttons.joinToString(",")
+    }
+
+    private fun formatDecimal(value: Double): String = String.format(Locale.ROOT, "%.2f", value)
+
     private inline fun forEachContinuousGoal(action: (Goal) -> Unit) {
         for (goal in goals) {
             if (goal !is Sporadic && goal.checkExecute()) {
@@ -252,6 +350,7 @@ open class ClientInstance(
         forEachContinuousGoal { goal ->
             goal.callTick()
         }
+        observeForegroundGoalDiagnostics()
     }
 
     @SafeVarargs
@@ -443,6 +542,8 @@ open class ClientInstance(
     }
 
     companion object {
+        private const val FOREGROUND_GOAL_WARN_TICKS = 20
+        private const val FOREGROUND_GOAL_WARN_INTERVAL_TICKS = 20
         private val logger = LogManager.getLogger(ClientInstance::class.java)
     }
 

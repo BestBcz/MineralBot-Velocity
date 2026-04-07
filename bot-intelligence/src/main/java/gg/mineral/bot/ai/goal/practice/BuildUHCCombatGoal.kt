@@ -6,6 +6,7 @@ import gg.mineral.bot.api.controls.MouseButton
 import gg.mineral.bot.api.entity.effect.PotionEffectType
 import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.event.Event
+import gg.mineral.bot.api.goal.GoalDebugState
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
@@ -14,7 +15,7 @@ import gg.mineral.bot.api.screen.type.ContainerScreen
 import gg.mineral.bot.api.world.block.Block
 
 class BuildUHCCombatGoal(clientInstance: ClientInstance) :
-        InventoryGoal(clientInstance), Sporadic, Timebound {
+        InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
     private companion object {
         const val GAPPLE_EAT_THRESHOLD = 12.0f
     }
@@ -683,6 +684,10 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     override fun blocksContinuousMovement(): Boolean {
         return isEatingApple() || waterState != WaterState.IDLE || clientInstance.currentTick <= actionLockUntilTick
+    }
+
+    override fun debugSummary(): String {
+        return "eatState=$eatState,waterState=$waterState,actionLockRemaining=${actionLockUntilTick - clientInstance.currentTick},preFightGappleUsed=$preFightGappleUsed,lastGappleAgo=${clientInstance.currentTick - lastGappleEatTick},lastHeadAgo=${clientInstance.currentTick - lastHeadEatTick}"
     }
 
     override fun onEnd() {
