@@ -106,7 +106,7 @@ class EatGoldenHeadGoal(clientInstance: ClientInstance) :
 
         tick.prerequisite("In Hotbar", headSlot <= 8) { moveItemToHotbar(headSlot, inventory) }
 
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
 

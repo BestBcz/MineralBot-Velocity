@@ -243,7 +243,7 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     override fun onTick(tick: Tick) {
         pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
         
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
         

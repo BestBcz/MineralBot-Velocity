@@ -134,7 +134,7 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
         tick.prerequisite(
             "Inventory Closed",
-            clientInstance.currentScreen !is ContainerScreen
+            clientInstance.currentScreen == null
         ) { pressKey(10, Key.Type.KEY_ESCAPE) }
 
         tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(potionSlot)) {

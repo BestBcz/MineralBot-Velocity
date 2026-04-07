@@ -53,6 +53,11 @@ abstract class InventoryGoal(clientInstance: ClientInstance) : Goal(clientInstan
                 selectHotbarSlot(moveIndex)
                 logger.debug("Swapped item to hotbar slot.")
             }
-        } else pressKey(10, Key.Type.KEY_E)
+        } else if (screen == null) {
+            pressKey(10, Key.Type.KEY_E)
+        } else {
+            pressKey(10, Key.Type.KEY_ESCAPE)
+            logger.debug("Unexpected screen {}; closing before inventory move", screen.javaClass.simpleName)
+        }
     }
 }

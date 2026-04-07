@@ -101,13 +101,6 @@ open class Keyboard(private val eventHandler: EventHandler) : gg.mineral.bot.api
         }
 
         if (iterator == null) {
-            keysLoop@ for (key in keys) {
-                if (key.isPressed) {
-                    for ((type) in logs) if (type == key.type) continue@keysLoop
-                    logs.add(Log(key.type, true))
-                }
-            }
-
             iterator = logs.iterator()
         }
 

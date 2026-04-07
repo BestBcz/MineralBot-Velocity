@@ -98,7 +98,7 @@ class HealSoupGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstanc
             moveItemToHotbar(soupSlot, inventory)
         }
 
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(
                 10,
                 Key.Type.KEY_ESCAPE

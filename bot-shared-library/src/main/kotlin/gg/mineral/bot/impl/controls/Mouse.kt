@@ -151,14 +151,6 @@ open class Mouse(private val eventHandler: EventHandler) : gg.mineral.bot.api.co
         }
 
         if (iterator == null) {
-            buttonsLoop@ for (button in mouseButtons) {
-                if (button.isPressed) {
-                    for ((type) in logs) if (type == button.type) continue@buttonsLoop
-
-                    logs.add(Log(button.type, true, x, y, dX, dY, dWheel))
-                }
-            }
-
             iterator = logs.iterator()
         }
 

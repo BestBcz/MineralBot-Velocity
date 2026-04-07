@@ -20,6 +20,7 @@ import gg.mineral.bot.api.inv.item.ItemStack
 import gg.mineral.bot.api.math.BoundingBox
 import gg.mineral.bot.api.math.simulation.PlayerMotionSimulator
 import gg.mineral.bot.api.screen.Screen
+import gg.mineral.bot.api.screen.type.ContainerScreen
 import gg.mineral.bot.api.world.ClientWorld
 import gg.mineral.bot.api.world.block.Block
 import gg.mineral.bot.base.client.manager.InstanceManager
@@ -35,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReference
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiScreen
 import net.minecraft.client.multiplayer.WorldClient
+import net.minecraft.client.settings.KeyBinding
 import net.minecraft.util.Session
 import org.apache.logging.log4j.LogManager
 
@@ -85,6 +87,7 @@ open class ClientInstance(
     private var foregroundGoalName: String? = null
     private var foregroundGoalStartTick = -1
     private var lastForegroundGoalWarnTick = -200
+    private var previousScreenOpen = false
 
     override val keyboard: Keyboard
         get() = super.keyboard
@@ -278,6 +281,42 @@ open class ClientInstance(
 
     private fun formatDecimal(value: Double): String = String.format(Locale.ROOT, "%.2f", value)
 
+    private fun recoverFromUnexpectedForegroundScreen() {
+        val goal = activeSporadicGoal() ?: return
+        val screen = currentScreen ?: return
+        if (screen is ContainerScreen || theWorld == null) {
+            return
+        }
+
+        val blocksControl = blocksContinuousAim || blocksContinuousAttack || blocksContinuousMovement
+        if (!blocksControl) {
+            return
+        }
+
+        logger.warn(
+                "Closing unexpected screen during foreground goal: goal={} screen={} keys={} buttons={}",
+                goal.javaClass.simpleName,
+                screen.javaClass.simpleName,
+                pressedKeySummary(),
+                pressedButtonSummary()
+        )
+        displayGuiScreen(null)
+    }
+
+    private fun resyncHeldInputsAfterScreenClose() {
+        if (theWorld == null) {
+            return
+        }
+
+        gg.mineral.bot.api.controls.Key.Type.entries
+                .filter { keyboard.getKey(it)?.isPressed == true }
+                .forEach { KeyBinding.setKeyBindState(this, it.keyCode, true) }
+
+        gg.mineral.bot.api.controls.MouseButton.Type.entries
+                .filter { it.keyCode >= 0 && mouse.getButton(it)?.isPressed == true }
+                .forEach { KeyBinding.setKeyBindState(this, it.keyCode - 100, true) }
+    }
+
     private inline fun forEachContinuousGoal(action: (Goal) -> Unit) {
         for (goal in goals) {
             if (goal !is Sporadic && goal.checkExecute()) {
@@ -335,6 +374,11 @@ open class ClientInstance(
         applyPendingGuideUpdate()
         super.runTick()
         currentTick++
+        recoverFromUnexpectedForegroundScreen()
+        if (previousScreenOpen && currentScreen == null) {
+            resyncHeldInputsAfterScreenClose()
+        }
+        previousScreenOpen = currentScreen != null
 
         // Update latency using a Gaussian distribution from the fake player's random.
         val fp = fakePlayer

@@ -129,7 +129,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
         enemy ?: return
 
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
 

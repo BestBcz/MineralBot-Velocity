@@ -12,7 +12,6 @@ import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.item.Item
-import gg.mineral.bot.api.screen.type.ContainerScreen
 
 /**
  * Anti-combo food defense goal.
@@ -131,7 +130,7 @@ class SafeEatGoal(clientInstance: ClientInstance) :
 
         tick.prerequisite("In Hotbar", foodSlot <= 8) { moveItemToHotbar(foodSlot, inventory) }
 
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+        tick.prerequisite("Screen Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
 
@@ -184,6 +183,9 @@ class SafeEatGoal(clientInstance: ClientInstance) :
         comboDetected = false
         hitsTaken = 0
         lastEatTick = clientInstance.currentTick
+        if (clientInstance.currentScreen != null) {
+            pressKey(10, Key.Type.KEY_ESCAPE)
+        }
         unpressButton(MouseButton.Type.RIGHT_CLICK)
         unpressKey(Key.Type.KEY_SPACE)
     }

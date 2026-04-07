@@ -126,7 +126,7 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         // If potion is already in hotbar, just select it
         if (healthSlot <= 8) {
             // Close inventory if open
-            tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+            tick.prerequisite("Screen Closed", clientInstance.currentScreen == null) {
                 pressKey(10, Key.Type.KEY_ESCAPE)
             }
 
@@ -142,9 +142,11 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             }
         } else {
             // Potion is in main inventory, need to move it
-            if (clientInstance.currentScreen !is ContainerScreen) {
+            if (clientInstance.currentScreen == null) {
                 // Open inventory
                 pressKey(10, Key.Type.KEY_E)
+            } else if (clientInstance.currentScreen !is ContainerScreen) {
+                pressKey(10, Key.Type.KEY_ESCAPE)
             } else {
                 // Inventory is open, move the item
                 moveItemToHotbar(healthSlot, inventory)
@@ -410,7 +412,7 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     }
 
     override fun onEnd() {
-        if (clientInstance.currentScreen is ContainerScreen)
+        if (clientInstance.currentScreen != null)
             pressKey(10, Key.Type.KEY_ESCAPE)
         healthRegression.clear()
         // Restore normal movement

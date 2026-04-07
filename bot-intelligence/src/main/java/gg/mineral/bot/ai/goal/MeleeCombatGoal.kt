@@ -546,7 +546,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         }
 
         if (!(clientInstance.hasActiveSporadicGoal && clientInstance.currentScreen is ContainerScreen)) {
-            tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+            tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
                 pressKey(
                     10,
                     Key.Type.KEY_ESCAPE

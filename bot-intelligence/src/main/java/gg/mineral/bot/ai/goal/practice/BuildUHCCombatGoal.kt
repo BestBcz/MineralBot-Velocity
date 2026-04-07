@@ -325,7 +325,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         tick.prerequisite("Eat Item In Hotbar", eatSlot <= 8) {
             moveItemToHotbar(eatSlot, inventory)
         }
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
         tick.prerequisite("Holding Eat Item", inventory.heldSlot == resolveHotbarSlot(eatSlot)) {
@@ -374,7 +374,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (rodSlot == -1) return false
 
         tick.prerequisite("Rod In Hotbar", rodSlot <= 8) { moveItemToHotbar(rodSlot, inventory) }
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
         tick.prerequisite("Holding Rod", inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
@@ -451,7 +451,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (bucketSlot == -1) return false
 
         tick.prerequisite("Bucket In Hotbar", bucketSlot <= 8) { moveItemToHotbar(bucketSlot, inventory) }
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
         tick.prerequisite("Holding Bucket", inventory.heldSlot == resolveHotbarSlot(bucketSlot)) {
@@ -496,7 +496,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         tick.prerequisite("Water Control In Hotbar", waterSlot <= 8) {
             moveItemToHotbar(waterSlot, inventory)
         }
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
         tick.prerequisite("Holding Water Control", inventory.heldSlot == resolveHotbarSlot(waterSlot)) {
@@ -560,7 +560,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.prerequisite("Opener Gapple In Hotbar", openerGapple <= 8) {
                     moveItemToHotbar(openerGapple, inventory)
                 }
-                tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+                tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
                     pressKey(10, Key.Type.KEY_ESCAPE)
                 }
                 tick.prerequisite("Holding Opener Gapple", inventory.heldSlot == resolveHotbarSlot(openerGapple)) {
@@ -584,7 +584,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.prerequisite("Head In Hotbar", headSlot <= 8) {
                     moveItemToHotbar(headSlot, inventory)
                 }
-                tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+                tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
                     pressKey(10, Key.Type.KEY_ESCAPE)
                 }
                 tick.prerequisite("Holding Head", inventory.heldSlot == resolveHotbarSlot(headSlot)) {
@@ -610,7 +610,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.prerequisite("Gapple In Hotbar", gappleSlot <= 8) {
                     moveItemToHotbar(gappleSlot, inventory)
                 }
-                tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+                tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
                     pressKey(10, Key.Type.KEY_ESCAPE)
                 }
                 tick.prerequisite("Holding Gapple", inventory.heldSlot == resolveHotbarSlot(gappleSlot)) {
@@ -632,7 +632,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 tick.prerequisite("Lava In Hotbar", lavaSlot <= 8) {
                     moveItemToHotbar(lavaSlot, inventory)
                 }
-                tick.prerequisite("Inventory Closed", clientInstance.currentScreen !is ContainerScreen) {
+                tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
                     pressKey(10, Key.Type.KEY_ESCAPE)
                 }
                 tick.prerequisite("Holding Lava", inventory.heldSlot == resolveHotbarSlot(lavaSlot)) {
