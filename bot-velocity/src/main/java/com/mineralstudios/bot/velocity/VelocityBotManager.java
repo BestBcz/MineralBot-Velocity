@@ -35,6 +35,8 @@ public class VelocityBotManager {
     private final ProxyServer server;
     private final Logger logger;
     private final boolean guideEnabled;
+    private final String botConnectHost;
+    private final int botConnectPort;
 
     private static final String SUB_CHANNEL_BOT_DUEL = "BotDuel";
     private static final String SUB_CHANNEL_BOT_DUEL_STARTED = "BotDuelStarted";
@@ -124,13 +126,27 @@ public class VelocityBotManager {
     // Track diagnostics: Bot UUID -> diagnostics snapshot/state
     private final Map<UUID, BotSessionDiagnostics> botDiagnostics = new ConcurrentHashMap<>();
 
-    public VelocityBotManager(Object plugin, ProxyServer server, Logger logger, boolean guideEnabled) {
+    public VelocityBotManager(
+            Object plugin,
+            ProxyServer server,
+            Logger logger,
+            boolean guideEnabled,
+            String botConnectHost,
+            int botConnectPort
+    ) {
         this.plugin = plugin;
         this.server = server;
         this.logger = logger;
         this.guideEnabled = guideEnabled;
+        this.botConnectHost = botConnectHost;
+        this.botConnectPort = botConnectPort;
 
-        logger.info("VelocityBotManager initialized (guide-enabled={})", guideEnabled);
+        logger.info(
+                "VelocityBotManager initialized (guide-enabled={}, bot-connect={}:{})",
+                guideEnabled,
+                botConnectHost,
+                botConnectPort
+        );
     }
 
     void recordProxyPacket(String botUsername, String packetKey) {
@@ -667,7 +683,7 @@ public class VelocityBotManager {
                         recordBotPacket(botUUID, packetKey, entityId, entityUuid));
 
                 // Set Connection Info - connect to proxy
-                bot.setServer("127.0.0.1", 25566);
+                bot.setServer(botConnectHost, botConnectPort);
 
                 // Track the bot and kit type
                 activeBots.put(botUUID, bot);

@@ -21,6 +21,8 @@ import java.util.Properties;
 @Plugin(id = "bot-velocity", name = "MineralBotVelocity", version = "1.0-SNAPSHOT", description = "Mineral-Bot integration for Velocity", authors = {
         "MineralStudios" })
 public class MineralBotVelocity {
+    private static final String DEFAULT_BOT_CONNECT_HOST = "127.0.0.1";
+    private static final int DEFAULT_BOT_CONNECT_PORT = 25567;
 
     private final ProxyServer server;
     private final Logger logger;
@@ -56,18 +58,30 @@ public class MineralBotVelocity {
         server.getChannelRegistrar().register(PLUGIN_CHANNEL);
         server.getChannelRegistrar().register(MINERAL_BOT_CHANNEL);
 
-        boolean guideEnabled = loadGuideEnabled();
+        BotVelocityConfig config = loadConfig();
 
-        VelocityBotManager botManager = new VelocityBotManager(this, server, logger, guideEnabled);
+        VelocityBotManager botManager = new VelocityBotManager(
+                this,
+                server,
+                logger,
+                config.guideEnabled(),
+                config.botConnectHost(),
+                config.botConnectPort()
+        );
 
         // Register Velocity and PacketEvents listeners
         server.getEventManager().register(this, botManager);
         PacketEvents.getAPI().getEventManager().registerListener(new BotPacketDiagnosticsListener(botManager));
 
-        logger.info("MineralBotVelocity has been initialized! guide-enabled={}", guideEnabled);
+        logger.info(
+                "MineralBotVelocity has been initialized! guide-enabled={}, bot-connect={}:{}",
+                config.guideEnabled(),
+                config.botConnectHost(),
+                config.botConnectPort()
+        );
     }
 
-    private boolean loadGuideEnabled() {
+    private BotVelocityConfig loadConfig() {
         Path configPath = dataDirectory.resolve("config.properties");
         Properties properties = new Properties();
 
@@ -80,20 +94,74 @@ public class MineralBotVelocity {
                 }
             }
 
-            boolean hasGuideSetting = properties.getProperty("guide-enabled") != null;
             boolean guideEnabled = Boolean.parseBoolean(properties.getProperty("guide-enabled", "true"));
+            String botConnectHost = properties.getProperty("bot-connect-host", DEFAULT_BOT_CONNECT_HOST).trim();
+            if (botConnectHost.isEmpty()) {
+                botConnectHost = DEFAULT_BOT_CONNECT_HOST;
+            }
+            int botConnectPort = parsePort(properties.getProperty("bot-connect-port"), DEFAULT_BOT_CONNECT_PORT);
 
-            if (!Files.exists(configPath) || !hasGuideSetting) {
-                properties.setProperty("guide-enabled", Boolean.toString(guideEnabled));
+            boolean needsWrite =
+                    properties.getProperty("guide-enabled") == null
+                            || properties.getProperty("bot-connect-host") == null
+                            || properties.getProperty("bot-connect-port") == null;
+
+            properties.setProperty("guide-enabled", Boolean.toString(guideEnabled));
+            properties.setProperty("bot-connect-host", botConnectHost);
+            properties.setProperty("bot-connect-port", Integer.toString(botConnectPort));
+
+            if (!Files.exists(configPath) || needsWrite) {
                 try (OutputStream output = Files.newOutputStream(configPath)) {
                     properties.store(output, "MineralBotVelocity configuration");
                 }
             }
 
-            return guideEnabled;
+            return new BotVelocityConfig(guideEnabled, botConnectHost, botConnectPort);
         } catch (IOException e) {
             logger.error("Failed to load bot-velocity config from {}", configPath, e);
-            return true;
+            return new BotVelocityConfig(true, DEFAULT_BOT_CONNECT_HOST, DEFAULT_BOT_CONNECT_PORT);
+        }
+    }
+
+    private int parsePort(String rawPort, int defaultPort) {
+        if (rawPort == null || rawPort.trim().isEmpty()) {
+            return defaultPort;
+        }
+
+        try {
+            int port = Integer.parseInt(rawPort.trim());
+            if (port < 1 || port > 65535) {
+                logger.warn("bot-connect-port {} is out of range. Falling back to {}.", rawPort, defaultPort);
+                return defaultPort;
+            }
+            return port;
+        } catch (NumberFormatException e) {
+            logger.warn("bot-connect-port {} is invalid. Falling back to {}.", rawPort, defaultPort);
+            return defaultPort;
+        }
+    }
+
+    private static final class BotVelocityConfig {
+        private final boolean guideEnabled;
+        private final String botConnectHost;
+        private final int botConnectPort;
+
+        private BotVelocityConfig(boolean guideEnabled, String botConnectHost, int botConnectPort) {
+            this.guideEnabled = guideEnabled;
+            this.botConnectHost = botConnectHost;
+            this.botConnectPort = botConnectPort;
+        }
+
+        private boolean guideEnabled() {
+            return guideEnabled;
+        }
+
+        private String botConnectHost() {
+            return botConnectHost;
+        }
+
+        private int botConnectPort() {
+            return botConnectPort;
         }
     }
 }
