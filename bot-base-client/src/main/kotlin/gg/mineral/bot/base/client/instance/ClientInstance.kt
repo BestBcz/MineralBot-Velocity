@@ -689,7 +689,7 @@ open class ClientInstance(
         val player = this.thePlayer
         if (player != null) {
             player.setKnockbackProfile(profile)
-            logger.info("Updated knockback profile for {}", player.commandSenderName)
+            if (logger.isDebugEnabled) logger.debug("Updated knockback profile for {}", player.commandSenderName)
         }
     }
 }

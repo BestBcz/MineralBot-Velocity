@@ -70,8 +70,8 @@ abstract class Goal(protected val clientInstance: ClientInstance) : MathUtil {
                 if (!condition) {
                     executeAsync(id, codeBlock, onComplete)
                     ended = true
-                    logger.debug("Prerequisite failed: $name")
-                } else logger.debug("Prerequisite passed: $name")
+                    if (logger.isDebugEnabled) logger.debug("Prerequisite failed: {}", name)
+                } else if (logger.isDebugEnabled) logger.debug("Prerequisite passed: {}", name)
             }
         }
 
@@ -80,8 +80,8 @@ abstract class Goal(protected val clientInstance: ClientInstance) : MathUtil {
                 if (!condition) {
                     codeBlock()
                     ended = true
-                    logger.debug("Prerequisite failed: $name")
-                } else logger.debug("Prerequisite passed: $name")
+                    if (logger.isDebugEnabled) logger.debug("Prerequisite failed: {}", name)
+                } else if (logger.isDebugEnabled) logger.debug("Prerequisite passed: {}", name)
             }
         }
 
@@ -90,8 +90,8 @@ abstract class Goal(protected val clientInstance: ClientInstance) : MathUtil {
                 if (condition) {
                     ended = true
                     finished = true
-                    logger.debug("Finished goal: $reason")
-                } else logger.debug("Not finished goal: $reason")
+                    if (logger.isDebugEnabled) logger.debug("Finished goal: {}", reason)
+                } else if (logger.isDebugEnabled) logger.debug("Not finished goal: {}", reason)
             }
         }
 
@@ -121,12 +121,12 @@ abstract class Goal(protected val clientInstance: ClientInstance) : MathUtil {
     protected abstract fun shouldExecute(): Boolean
 
     fun callTick() {
-        logger.debug("callTick called of ${this.javaClass.simpleName}")
+        if (logger.isDebugEnabled) logger.debug("callTick called of {}", this.javaClass.simpleName)
         if (this is Timebound && this is Sporadic) {
             // maxDuration in this project is configured in tick units for most goals.
             // Using wall-clock milliseconds causes short item-use goals (e.g. eating) to end too early.
             if (tickCount >= maxDuration) {
-                logger.debug("Finished timebound goal: ${this.javaClass.simpleName}")
+                if (logger.isDebugEnabled) logger.debug("Finished timebound goal: {}", this.javaClass.simpleName)
                 finish()
                 return
             }

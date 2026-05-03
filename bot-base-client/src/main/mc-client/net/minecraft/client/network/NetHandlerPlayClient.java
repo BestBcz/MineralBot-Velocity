@@ -369,8 +369,13 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         Entity var2 = this.clientWorldController.getEntityByID(p_147244_1_.func_149412_c());
 
         if (var2 != null) {
-            var2.setVelocity((double) p_147244_1_.func_149411_d() / 8000.0D,
-                    (double) p_147244_1_.func_149410_e() / 8000.0D, (double) p_147244_1_.func_149409_f() / 8000.0D);
+            double velocityX = (double) p_147244_1_.func_149411_d() / 8000.0D;
+            double velocityY = (double) p_147244_1_.func_149410_e() / 8000.0D;
+            double velocityZ = (double) p_147244_1_.func_149409_f() / 8000.0D;
+            var2.setVelocity(velocityX, velocityY, velocityZ);
+            if (var2 == this.gameController.thePlayer) {
+                this.gameController.thePlayer.markVelocityImpulse(velocityX, velocityY, velocityZ);
+            }
             recordClientboundPacket("ENTITY_VELOCITY", var2);
         }
     }
@@ -919,9 +924,13 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         EntityClientPlayerMP thePlayer = this.gameController.thePlayer;
 
         if (thePlayer != null) {
-            thePlayer.motionX += p_147283_1_.func_149149_c();
-            thePlayer.motionY += p_147283_1_.func_149144_d();
-            thePlayer.motionZ += p_147283_1_.func_149147_e();
+            double velocityX = p_147283_1_.func_149149_c();
+            double velocityY = p_147283_1_.func_149144_d();
+            double velocityZ = p_147283_1_.func_149147_e();
+            thePlayer.motionX += velocityX;
+            thePlayer.motionY += velocityY;
+            thePlayer.motionZ += velocityZ;
+            thePlayer.markVelocityImpulse(velocityX, velocityY, velocityZ);
         }
     }
 
@@ -1499,6 +1508,10 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
      */
     public void handleCustomPayload(S3FPacketCustomPayload p_147240_1_) {
         EntityClientPlayerMP thePlayer = this.gameController.thePlayer;
+        if (handleMineralBotPayload(p_147240_1_)) {
+            return;
+        }
+
         if ("MC|TrList".equals(p_147240_1_.func_149169_c())) {
             ByteBuf var2 = Unpooled.wrappedBuffer(p_147240_1_.func_149168_d());
 
@@ -1547,6 +1560,56 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
                         I18n.format("multiplayer.texturePrompt.line2"), 0));
             }
         }
+    }
+
+    private boolean handleMineralBotPayload(S3FPacketCustomPayload packet) {
+        String channel = packet.func_149169_c();
+        if (!"MineralBot".equals(channel) && !"mineralbot:main".equals(channel)) {
+            return false;
+        }
+
+        byte[] data = packet.func_149168_d();
+        if (data == null || data.length == 0) {
+            return true;
+        }
+
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
+            String subChannel = in.readUTF();
+            if (!"BotKnockback".equals(subChannel)) {
+                return true;
+            }
+
+            String name = in.readUTF();
+            double friction = in.readDouble();
+            double horizontal = in.readDouble();
+            double vertical = in.readDouble();
+            double verticalLimit = in.readDouble();
+            double extraHorizontal = in.readDouble();
+            double extraVertical = in.readDouble();
+            double recoilMultiplier = in.readDouble();
+
+            gg.mineral.bot.base.client.profile.KnockbackProfile profile =
+                    new gg.mineral.bot.base.client.profile.KnockbackProfile(
+                            name,
+                            friction,
+                            horizontal,
+                            vertical,
+                            verticalLimit,
+                            extraHorizontal,
+                            extraVertical,
+                            recoilMultiplier
+                    );
+
+            if (this.gameController instanceof ClientInstance instance) {
+                instance.updateKnockbackProfile(profile);
+            } else if (this.gameController.thePlayer != null) {
+                this.gameController.thePlayer.setKnockbackProfile(profile);
+            }
+        } catch (IOException e) {
+            logger.warn("Failed to parse MineralBot payload on channel {}", channel, e);
+        }
+
+        return true;
     }
 
     /**

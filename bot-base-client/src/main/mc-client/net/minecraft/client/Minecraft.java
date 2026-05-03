@@ -1939,7 +1939,7 @@ public class Minecraft {
 
             this.mcProfiler.endStartSection("gameRenderer");
 
-            if (!this.isGamePaused)
+            if (!BotGlobalConfig.optimizedGameLoop && !this.isGamePaused)
                 this.entityRenderer.updateRenderer();
 
             this.mcProfiler.endStartSection("levelRenderer");

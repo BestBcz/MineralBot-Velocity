@@ -933,16 +933,14 @@ public abstract class EntityLivingBase extends Entity implements ClientLivingEnt
      */
     public void knockBack(Entity p_70653_1_, float p_70653_2_, double p_70653_3_, double p_70653_5_) {
         if (this.knockbackProfile != null) {
-            System.out.println("[BotDebug] Applying Custom Knockback: " + this.knockbackProfile.getName()
-                    + " F=" + this.knockbackProfile.getFriction()
-                    + " H=" + this.knockbackProfile.getHorizontal()
-                    + " V=" + this.knockbackProfile.getVertical()
-                    + " VL=" + this.knockbackProfile.getVerticalLimit());
             if (this.rand.nextDouble() >= this.getEntityAttribute(SharedMonsterAttributes.knockbackResistance)
                     .getAttributeValue()) {
                 this.isAirBorne = true;
                 float var7 = MathHelper.sqrt_double(p_70653_3_ * p_70653_3_ + p_70653_5_ * p_70653_5_);
                 double magnitude = var7;
+                if (magnitude < 1.0E-4D) {
+                    return;
+                }
 
                 this.motionX /= this.knockbackProfile.getFriction();
                 this.motionY /= this.knockbackProfile.getFriction();
