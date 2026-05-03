@@ -57,12 +57,33 @@ public class EntityClientPlayerMP extends EntityPlayerSP implements FakePlayer {
      */
     private boolean hasSetHealth;
     private String field_142022_ce;
-
+    private int velocityImpulseInputTicks;
+    private int consecutiveVelocityImpulses;
+    private int lastVelocityImpulseTick = -1000;
+    private static final int VELOCITY_INPUT_RECOVERY_TICKS = 2;
+    private static final int VELOCITY_TRADE_WINDOW_TICKS = 20;
+    private static final int MAX_TRADE_INPUT_RECOVERY_IMPULSES = 2;
     public EntityClientPlayerMP(Minecraft p_i45064_1_, World p_i45064_2_, Session p_i45064_3_,
             NetHandlerPlayClient p_i45064_4_, StatFileWriter p_i45064_5_) {
         super(p_i45064_1_, p_i45064_2_, p_i45064_3_, 0);
         this.sendQueue = p_i45064_4_;
         this.field_146108_bO = p_i45064_5_;
+    }
+
+    public void markVelocityImpulse(double velocityX, double velocityY, double velocityZ) {
+        if (velocityX * velocityX + velocityY * velocityY + velocityZ * velocityZ > 1.0E-4D) {
+            if (this.ticksExisted - this.lastVelocityImpulseTick <= VELOCITY_TRADE_WINDOW_TICKS) {
+                ++this.consecutiveVelocityImpulses;
+            } else {
+                this.consecutiveVelocityImpulses = 1;
+            }
+
+            this.lastVelocityImpulseTick = this.ticksExisted;
+            this.velocityImpulseInputTicks =
+                    this.consecutiveVelocityImpulses <= MAX_TRADE_INPUT_RECOVERY_IMPULSES
+                            ? VELOCITY_INPUT_RECOVERY_TICKS
+                            : 0;
+        }
     }
 
     /**
@@ -89,6 +110,19 @@ public class EntityClientPlayerMP extends EntityPlayerSP implements FakePlayer {
         if (p_70078_1_ instanceof EntityMinecart minecart && soundHandler != null)
             soundHandler.playSound(new MovingSoundMinecartRiding(this, minecart));
 
+    }
+
+    @Override
+    public void updateEntityActionState() {
+        super.updateEntityActionState();
+
+        if (this.velocityImpulseInputTicks <= 0)
+            return;
+
+        float inputScale = this.velocityImpulseInputTicks > 1 ? 0.65F : 0.85F;
+        this.moveStrafing *= inputScale;
+        this.moveForward *= inputScale;
+        --this.velocityImpulseInputTicks;
     }
 
     /**
