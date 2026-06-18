@@ -1,9 +1,9 @@
 package gg.mineral.bot.ai.goal
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
-import gg.mineral.bot.api.entity.living.ClientLivingEntity
 import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.entity.living.player.FakePlayer
 import gg.mineral.bot.api.event.Event
@@ -42,11 +42,12 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         get() = clientInstance.currentScreen !is ContainerScreen && !shouldExecute()
     override val maxDuration: Long = 100
     private var lastPearledTick = 0
+    private val perception = CombatPerception(clientInstance)
 
 
     private enum class Type : MathUtil {
         RETREAT {
-            override fun test(fakePlayer: FakePlayer, entity: ClientLivingEntity) = false
+            override fun test(fakePlayer: FakePlayer, targetState: CombatPerception.PlayerState) = false
 
             /**
              * Checks whether the bot is “at a wall” by sampling a block a short distance
@@ -72,15 +73,15 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
             }
         },
         SIDE {
-            override fun test(fakePlayer: FakePlayer, entity: ClientLivingEntity) =
+            override fun test(fakePlayer: FakePlayer, targetState: CombatPerception.PlayerState) =
                 false /*fakePlayer.distance2DTo(entity.x, entity.z) in 3.6..6.0 && fakePlayer.isOnGround*/
         },
         FORWARD {
-            override fun test(fakePlayer: FakePlayer, entity: ClientLivingEntity) =
-                fakePlayer.distance3DTo(entity) > 6.0
+            override fun test(fakePlayer: FakePlayer, targetState: CombatPerception.PlayerState) =
+                targetState.distance3D > 6.0 && targetState.lineOfSightLikelyClear
         };
 
-        abstract fun test(fakePlayer: FakePlayer, entity: ClientLivingEntity): Boolean
+        abstract fun test(fakePlayer: FakePlayer, targetState: CombatPerception.PlayerState): Boolean
     }
 
     override fun shouldExecute(): Boolean {
@@ -91,15 +92,10 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
 
         if (!inventory.contains(Item.ENDER_PEARL)) return false
 
-        val world = fakePlayer.world
-
-        val entity = world.entities.filterIsInstance<ClientPlayer>().minByOrNull {
-            if (!clientInstance.configuration.friendlyUUIDs.contains(it.uuid)
-            ) fakePlayer.distance3DTo(it) else Double.MAX_VALUE
-        } ?: return false
+        val targetState = perception.nearestVisibleEnemy() ?: return false
 
         for (t in Type.entries) {
-            if (t.test(fakePlayer, entity)) {
+            if (t.test(fakePlayer, targetState)) {
                 return fakePlayer.health > clientInstance.configuration.pearlHealthThreshold
             }
         }
@@ -111,12 +107,7 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     }
 
     private fun canSeeEnemy(): Boolean {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-        return world.entities.any {
-            !clientInstance.configuration.friendlyUUIDs
-                .contains(it.uuid)
-        }
+        return perception.canSeeEnemy()
     }
 
     private fun getPearlSlot(): Int {
@@ -144,16 +135,13 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
 
         tick.finishIf("Valid pearl slot not found", pearlSlot == -1)
 
-        val entity = world.entities.filterIsInstance<ClientPlayer>().minByOrNull {
-            if (!clientInstance.configuration.friendlyUUIDs.contains(it.uuid)
-            ) fakePlayer.distance3DTo(it) else Double.MAX_VALUE
-        }
+        val targetState = perception.bestTarget()
 
-        tick.finishIf("Enemy is not present", entity == null)
-        entity ?: return
+        tick.finishIf("Enemy is not present", targetState == null)
+        targetState ?: return
 
         val type: Type = Type.entries.firstOrNull {
-            it.test(fakePlayer, entity)
+            it.test(fakePlayer, targetState)
         } ?: run {
             tick.finishIf("No valid type found", true)
             return
@@ -176,9 +164,9 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
 
         tick.finishIf("Not Holding Valid Pearl", inventory.heldItemStack?.item?.id != Item.ENDER_PEARL)
 
-        val targetX = entity.x + (entity.x - entity.lastX)
-        val targetY = entity.y + (entity.y - entity.lastY)
-        val targetZ = entity.z + (entity.z - entity.lastZ)
+        val targetX = targetState.x + targetState.velocityX
+        val targetY = targetState.y + targetState.velocityY
+        val targetZ = targetState.z + targetState.velocityZ
 
         val collisionFunction = when (type) {
             Type.FORWARD -> CollisionFunction { x1: Double, y1: Double, z1: Double ->
@@ -253,7 +241,7 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         }*/
 
         // Aim pearl to land near enemy feet instead of face/chest level.
-        val angles = getAnglesToFeet(fakePlayer, entity)
+        val angles = getAnglesToFeet(fakePlayer, targetState)
         setMouseYaw(angles[0])
         setMousePitch(angles[1])
 
@@ -280,20 +268,17 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     override fun onEnd() {
     }
 
-    private fun getAnglesToFeet(player: ClientPlayer, entity: ClientPlayer): FloatArray {
-        val xDelta = (entity.x - entity.lastX) * 0.25
-        val zDelta = (entity.z - entity.lastZ) * 0.25
-        val horizontalDistance = player.distance2DTo(entity.x, entity.z)
-        val leadScale = (horizontalDistance / 4.0).coerceIn(0.5, 1.8)
+    private fun getAnglesToFeet(player: ClientPlayer, targetState: CombatPerception.PlayerState): FloatArray {
+        val leadScale = (targetState.distance2D / 8.0).coerceIn(0.25, 1.2)
 
-        val predictedX = entity.x + xDelta * leadScale
-        val predictedZ = entity.z + zDelta * leadScale
+        val predictedX = targetState.x + targetState.velocityX * leadScale
+        val predictedZ = targetState.z + targetState.velocityZ * leadScale
 
         val x = predictedX - player.x
         val z = predictedZ - player.z
 
         // Intentionally bias the target to the feet area to avoid over-shooting behind moving targets.
-        val feetY = entity.y + 0.05
+        val feetY = targetState.y + 0.05
         val y = feetY - (player.y + player.eyeHeight)
 
         val yaw = Math.toDegrees(atan2(z, x)).toFloat() - 90.0f

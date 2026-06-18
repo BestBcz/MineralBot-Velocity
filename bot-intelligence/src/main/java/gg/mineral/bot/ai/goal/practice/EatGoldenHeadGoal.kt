@@ -1,9 +1,9 @@
 package gg.mineral.bot.ai.goal.practice
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
-import gg.mineral.bot.api.entity.living.ClientLivingEntity
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.event.peripherals.MouseButtonEvent
 import gg.mineral.bot.api.goal.Sporadic
@@ -22,6 +22,7 @@ class EatGoldenHeadGoal(clientInstance: ClientInstance) :
     override var startTime: Long = 0
     override val maxDuration: Long = 100
     private var eating = false
+    private val perception = CombatPerception(clientInstance)
 
     override fun shouldExecute(): Boolean {
         val fakePlayer = clientInstance.fakePlayer
@@ -37,8 +38,14 @@ class EatGoldenHeadGoal(clientInstance: ClientInstance) :
             }
         }
 
+        val enemy = perception.nearestEnemy()
+        val hasWindow = enemy == null ||
+                enemy.distance3D > 3.0 ||
+                fakePlayer.health <= 3.0f ||
+                !enemy.pressuringSelf
+
         // Eat golden head when health is critically low (6 or less)
-        return hasGoldenHead && fakePlayer.health <= 6 && distanceAwayFromEnemies() > 3.0
+        return hasGoldenHead && fakePlayer.health <= 6 && hasWindow
     }
 
     override fun onStart() {
@@ -47,39 +54,11 @@ class EatGoldenHeadGoal(clientInstance: ClientInstance) :
     }
 
     private fun angleAwayFromEnemies(): Float {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-
-        val enemy =
-                world.entities.minByOrNull {
-                    if (it is ClientLivingEntity &&
-                                    !clientInstance.configuration.friendlyUUIDs.contains(it.uuid)
-                    )
-                            it.distance3DTo(fakePlayer)
-                    else Double.MAX_VALUE
-                }
-                        ?: return fakePlayer.yaw
-        val x: Double = enemy.x - fakePlayer.x
-        val z: Double = enemy.z - fakePlayer.z
-
-        var yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat()
-        if (z < 0.0 && x < 0.0) yaw = (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-        else if (z < 0.0 && x > 0.0) yaw = (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-        return yaw + 180.0f
+        return perception.safeYawAwayFromNearestEnemy()
     }
 
     private fun distanceAwayFromEnemies(): Double {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-
-        return world.entities.minOfOrNull {
-            if (it is ClientLivingEntity &&
-                            !clientInstance.configuration.friendlyUUIDs.contains(it.uuid)
-            )
-                    it.distance3DTo(fakePlayer)
-            else Double.MAX_VALUE
-        }
-                ?: Double.MAX_VALUE
+        return perception.distanceToNearestEnemy()
     }
 
     private fun getGoldenHeadSlot(): Int {

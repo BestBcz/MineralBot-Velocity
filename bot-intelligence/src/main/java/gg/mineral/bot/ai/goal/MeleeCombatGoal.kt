@@ -1,6 +1,7 @@
 package gg.mineral.bot.ai.goal
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
 import gg.mineral.bot.api.entity.ClientEntity
@@ -14,6 +15,7 @@ import gg.mineral.bot.api.screen.type.ContainerScreen
 import gg.mineral.bot.api.world.block.Block
 
 class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance) {
+    private val perception = CombatPerception(clientInstance)
     private var target: ClientPlayer? = null
 
     private val meanDelay = (1000 / clientInstance.configuration.averageCps).toLong()
@@ -37,45 +39,36 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
     private fun findTarget() {
         val targetSearchRange = clientInstance.configuration.targetSearchRange
-
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-        val entities = world.entities
+        val snapshot = perception.snapshot()
 
         if (clientInstance.currentTick - lastTargetSwitchTick < 20) {
             val currentTarget = target
-            if (currentTarget != null && entities.contains(currentTarget) &&
-                isTargetValid(currentTarget, targetSearchRange.toFloat())
-            ) {
-                noteTargetState(currentTarget)
+            val currentTargetState = snapshot.stateFor(currentTarget)
+            if (currentTargetState != null && currentTargetState.distance3D <= targetSearchRange) {
+                noteTargetState(currentTargetState)
                 return
             }
         }
 
-        var closestTarget: ClientPlayer? = null
-        var closestDistance = Double.MAX_VALUE
-
-        for (entity in entities) {
-            if (entity is ClientPlayer && isTargetValid(entity, targetSearchRange.toFloat())) {
-                val distance = fakePlayer.distance3DTo(entity)
-                if (distance < closestDistance) {
-                    closestDistance = distance
-                    closestTarget = entity
-                }
-            }
+        val targetState = snapshot.bestTargetState(target, targetSearchRange.toDouble())
+        if (targetState != null) {
+            noteTargetState(targetState)
         }
 
-        if (closestTarget != null) {
-            noteTargetState(closestTarget)
-        }
-
-        if (closestTarget !== this.target) {
+        val nextTarget = targetState?.entity
+        if (nextTarget !== this.target) {
             lastTargetSwitchTick = clientInstance.currentTick
-            this.target = closestTarget
+            this.target = nextTarget
         }
     }
 
     private fun noteTargetState(target: ClientPlayer) {
+        val targetState = perception.snapshot().stateFor(target)
+        if (targetState != null) {
+            noteTargetState(targetState)
+            return
+        }
+
         lastSeenTargetTick = clientInstance.currentTick
         lastKnownTargetX = target.x
         lastKnownTargetY = target.y
@@ -89,10 +82,25 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         smoothedTargetVelZ = smoothedTargetVelZ * 0.68 + rawVelZ * 0.32
     }
 
-    private fun buildPredictedTarget(target: ClientPlayer): ClientPlayer {
-        noteTargetState(target)
+    private fun noteTargetState(targetState: CombatPerception.PlayerState) {
+        lastSeenTargetTick = targetState.tick
+        lastKnownTargetX = targetState.x
+        lastKnownTargetY = targetState.y
+        lastKnownTargetZ = targetState.z
 
-        val distance = clientInstance.fakePlayer.distance3DTo(target)
+        smoothedTargetVelX = smoothedTargetVelX * 0.68 + targetState.velocityX * 0.32
+        smoothedTargetVelZ = smoothedTargetVelZ * 0.68 + targetState.velocityZ * 0.32
+    }
+
+    private fun buildPredictedTarget(target: ClientPlayer): ClientPlayer {
+        val targetState = perception.snapshot().stateFor(target)
+        if (targetState != null) {
+            noteTargetState(targetState)
+        } else {
+            noteTargetState(target)
+        }
+
+        val distance = targetState?.distance3D ?: clientInstance.fakePlayer.distance3DTo(target)
         val leadTicks =
             when {
                 distance <= 2.4 -> 0.12
@@ -107,8 +115,10 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
                 else -> 0.32
             }
 
-        val leadX = (smoothedTargetVelX * leadTicks).coerceIn(-maxLead, maxLead)
-        val leadZ = (smoothedTargetVelZ * leadTicks).coerceIn(-maxLead, maxLead)
+        val velocityX = targetState?.velocityX ?: smoothedTargetVelX
+        val velocityZ = targetState?.velocityZ ?: smoothedTargetVelZ
+        val leadX = (velocityX * leadTicks).coerceIn(-maxLead, maxLead)
+        val leadZ = (velocityZ * leadTicks).coerceIn(-maxLead, maxLead)
         val predictedX = target.x + leadX
         val predictedZ = target.z + leadZ
 
@@ -124,11 +134,6 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val dz = lastKnownTargetZ - fakePlayer.z
         if (abs(dx) < 0.001 && abs(dz) < 0.001) return fakePlayer.yaw
         return toDegrees(fastArcTan2(-dx, dz)).toFloat()
-    }
-
-    private fun isTargetValid(entity: ClientLivingEntity, range: Float): Boolean {
-        val fakePlayer = clientInstance.fakePlayer
-        return !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid) && fakePlayer.distance3DTo(entity) <= range && entity is ClientPlayer
     }
 
     private fun getRotationTarget(
@@ -412,7 +417,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val target = this.target ?: return
 
         val fakePlayer = clientInstance.fakePlayer
-        val distance = fakePlayer.distance3DTo(target)
+        val distance = perception.snapshot().stateFor(target)?.distance3D ?: fakePlayer.distance3DTo(target)
         if (!fakePlayer.isOnGround || distance > clientInstance.configuration.strafeActivationRange /*
                                                          * || timeMillis() -
                                                          * fakePlayer.
@@ -448,7 +453,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         )
         val aimVector = vectorForRotation(
             target.pitch,
-            target.yaw
+            (target as? ClientPlayer)?.let { perception.snapshot().stateFor(it)?.yaw } ?: target.yaw
         )
 
         val crossProduct = crossProduct2D(toPlayer, aimVector)
@@ -649,6 +654,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     private fun applyHumanizedMovement() {
         val target = this.target
         val fakePlayer = clientInstance.fakePlayer
+        val snapshot = perception.snapshot()
         expireHitWindow()
 
         if (target == null) {
@@ -670,7 +676,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             return
         }
 
-        val distance = fakePlayer.distance3DTo(target)
+        val targetState = snapshot.stateFor(target)
+        val distance = targetState?.distance3D ?: fakePlayer.distance3DTo(target)
         val winningTrade = recentHitsOnTarget >= recentHitsTaken + 1
 
         if (winningTrade &&
@@ -682,29 +689,54 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             lastPressureResetTick = clientInstance.currentTick
         }
 
+        if (dodgeIncomingThreat(snapshot)) {
+            return
+        }
+
         applyTerrainAwareMovement()
         strafe()
     }
 
+    private fun dodgeIncomingThreat(snapshot: CombatPerception.Snapshot): Boolean {
+        val threat = snapshot.nearestIncomingThreat ?: return false
+        val fakePlayer = clientInstance.fakePlayer
+        if (!fakePlayer.isOnGround ||
+            threat.timeToClosestTicks > 8.0 ||
+            threat.closestDistanceToSelf > 2.1
+        ) {
+            return false
+        }
+
+        val forward = vectorForRotation(0f, fakePlayer.yaw)
+        val cross = forward[0] * threat.velocityZ - forward[2] * threat.velocityX
+        val leftScore = perception.terrainAhead(fakePlayer.yaw - 55f, 0.85).traversalScore
+        val rightScore = perception.terrainAhead(fakePlayer.yaw + 55f, 0.85).traversalScore
+        val dodgeLeft =
+            if (leftScore != rightScore) leftScore > rightScore
+            else cross >= 0.0
+
+        if ((dodgeLeft && leftScore < 0) || (!dodgeLeft && rightScore < 0)) {
+            return false
+        }
+
+        if (dodgeLeft) {
+            unpressKey(Key.Type.KEY_D)
+            pressKey(Key.Type.KEY_A)
+        } else {
+            unpressKey(Key.Type.KEY_A)
+            pressKey(Key.Type.KEY_D)
+        }
+        suppressForwardFor(1)
+        return true
+    }
+
     private fun applyTerrainAwareMovement() {
         val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
+        val terrain = perception.terrainAhead(fakePlayer.yaw)
+        val nextFeetBlock = terrain.feetBlockId
+        val nextHeadBlock = terrain.headBlockId
 
-        val dir = vectorForRotation(0f, fakePlayer.yaw)
-        val nextX = fakePlayer.x + dir[0] * 0.75
-        val nextZ = fakePlayer.z + dir[2] * 0.75
-
-        val nextFeetBlock = world.getBlockAt(nextX, fakePlayer.y, nextZ).id
-        val nextHeadBlock = world.getBlockAt(nextX, fakePlayer.y + 1.0, nextZ).id
-        val groundAhead = world.getBlockAt(nextX, fakePlayer.y - 1.0, nextZ).id
-
-        val lavaAhead =
-                nextFeetBlock == Block.LAVA_FLOWING ||
-                        nextFeetBlock == Block.LAVA_STILL ||
-                        nextHeadBlock == Block.LAVA_FLOWING ||
-                        nextHeadBlock == Block.LAVA_STILL
-
-        if (lavaAhead) {
+        if (terrain.lavaAhead) {
             // Soft sidestep to avoid walking directly into lava.
             suppressForwardFor(2)
             pressKey(100, Key.Type.KEY_A)
@@ -712,27 +744,10 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             return
         }
 
-        val frontBlocked = nextFeetBlock != Block.AIR && nextHeadBlock != Block.AIR
-        if (frontBlocked) {
+        if (terrain.frontBlocked) {
             // Try to route around obstacle instead of face-tanking into it.
-            val leftDir = vectorForRotation(0f, fakePlayer.yaw - 35f)
-            val rightDir = vectorForRotation(0f, fakePlayer.yaw + 35f)
-
-            fun sideScore(side: DoubleArray): Int {
-                val sx = fakePlayer.x + side[0] * 0.95
-                val sz = fakePlayer.z + side[2] * 0.95
-                val feet = world.getBlockAt(sx, fakePlayer.y, sz).id
-                val head = world.getBlockAt(sx, fakePlayer.y + 1.0, sz).id
-                val ground = world.getBlockAt(sx, fakePlayer.y - 1.0, sz).id
-                var score = 0
-                if (feet == Block.AIR) score += 2
-                if (head == Block.AIR) score += 2
-                if (ground != Block.AIR) score += 1
-                return score
-            }
-
-            val leftScore = sideScore(leftDir)
-            val rightScore = sideScore(rightDir)
+            val leftScore = perception.terrainAhead(fakePlayer.yaw - 35f, 0.95).traversalScore
+            val rightScore = perception.terrainAhead(fakePlayer.yaw + 35f, 0.95).traversalScore
             if (leftScore >= rightScore) {
                 pressKey(110, Key.Type.KEY_A)
                 unpressKey(110, Key.Type.KEY_D)
@@ -746,16 +761,14 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         }
 
         // Don't drop into holes blindly.
-        if (groundAhead == Block.AIR && fakePlayer.isOnGround) {
+        if (terrain.dropAhead && fakePlayer.isOnGround) {
             suppressForwardFor(3)
             pressKey(120, Key.Type.KEY_A)
             return
         }
 
-        val lowProfileStep = nextFeetBlock == Block.CARPET || nextFeetBlock == Block.SNOW_LAYER
-
         // Auto-jump on small ledges / one-block highs, but not on carpet/snow-layer micro-steps.
-        if (!lowProfileStep && nextFeetBlock != Block.AIR && nextHeadBlock == Block.AIR && fakePlayer.isOnGround) {
+        if (!terrain.lowProfileStep && nextFeetBlock != Block.AIR && nextHeadBlock == Block.AIR && fakePlayer.isOnGround) {
             pressKey(100, Key.Type.KEY_SPACE)
         }
     }

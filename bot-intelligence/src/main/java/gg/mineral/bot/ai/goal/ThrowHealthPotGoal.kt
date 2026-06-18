@@ -1,9 +1,9 @@
 package gg.mineral.bot.ai.goal
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
-import gg.mineral.bot.api.entity.living.ClientLivingEntity
 import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.entity.living.player.FakePlayer
 import gg.mineral.bot.api.entity.throwable.ClientPotion
@@ -37,6 +37,7 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
 
     private val healthRegression: SimpleRegression = SimpleRegression()
     private var lastPotTick = 0
+    private val perception = CombatPerception(clientInstance)
 
     // Simplified state management
     private enum class PotState {
@@ -68,7 +69,9 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         // Check if we have health pots
         if (!inventory.contains { it: ItemStack -> isHealthPot(it) }) return false
 
-        val distanceFromEnemies = distanceAwayFromEnemies()
+        val enemy = perception.nearestEnemy()
+        val distanceFromEnemies = enemy?.distance2D ?: Double.MAX_VALUE
+        val hasPressure = enemy?.pressuringSelf == true && distanceFromEnemies < 4.2
 
         // Update health regression
         healthRegression.addData(clientInstance.currentTick.toDouble(), fakePlayer.health.toDouble())
@@ -79,7 +82,7 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         )
 
         // Throw if health is low
-        return health < 12 && (health < 6 || distanceFromEnemies > 3.8)
+        return health < 12 && (health < 6 || distanceFromEnemies > 3.8 || !hasPressure)
     }
 
     override fun onStart() {
@@ -271,15 +274,12 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         // Throw the potion
         pressButton(5, MouseButton.Type.RIGHT_CLICK)
 
-        // Look for the thrown potion entity
-        val world = fakePlayer.world
-        val nearbyPotion = world.entities
-            .filterIsInstance<ClientPotion>()
-            .filter { it.potionDurability == 16421 }
-            .minByOrNull { it.distance3DTo(fakePlayer) }
+        // Look for the thrown potion entity from the current perception snapshot.
+        val nearbyPotion = perception.potionProjectiles(16421)
+            .minByOrNull { it.distance3D }
 
         if (nearbyPotion != null) {
-            thrownPotionId = nearbyPotion.entityId
+            thrownPotionId = nearbyPotion.entity.entityId
             healthBeforeThrow = fakePlayer.health
             maxHealthAfterThrow = fakePlayer.health
             splashApplied = false
@@ -315,10 +315,8 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
 
         // Track the thrown potion if we can find it
         thrownPotionId?.let { potionId ->
-            val world = fakePlayer.world
-            val potion = world.entities
-                .filterIsInstance<ClientPotion>()
-                .find { it.entityId == potionId }
+            val potion = perception.potionProjectiles()
+                .find { it.entity.entityId == potionId }
 
             if (potion != null) {
                 potionTracked = true
@@ -330,9 +328,9 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
                     potion.x,
                     potion.y,
                     potion.z,
-                    potion.motionX,
-                    potion.motionY,
-                    potion.motionZ
+                    potion.velocityX,
+                    potion.velocityY,
+                    potion.velocityZ
                 ) { x, y, z -> hasHitBlock(fakePlayer.world, x, y, z) }
 
                 // Calculate where it will land
@@ -461,75 +459,19 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     }
 
     private fun angleAwayFromEnemies(): Float {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-
-        val enemy = world.entities
-            .minByOrNull {
-                if (it is ClientLivingEntity && !clientInstance.configuration.friendlyUUIDs.contains(it.uuid))
-                    it.distance3DTo(fakePlayer)
-                else Double.MAX_VALUE
-            } ?: return fakePlayer.yaw
-        val x: Double = enemy.x - fakePlayer.x
-        val z: Double = enemy.z - fakePlayer.z
-
-        var yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat()
-        if (z < 0.0 && x < 0.0) yaw = (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-        else if (z < 0.0 && x > 0.0) yaw = (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-        return yaw + 180.0f
+        return perception.safeYawAwayFromNearestEnemy()
     }
 
     private fun angleTowardsEnemies(): Float {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-
-        val enemy = world.entities
-            .minByOrNull {
-                if (it is ClientLivingEntity && !clientInstance.configuration.friendlyUUIDs.contains(it.uuid))
-                    it.distance3DTo(fakePlayer)
-                else Double.MAX_VALUE
-            } ?: return fakePlayer.yaw
-
-        val x: Double = enemy.x - fakePlayer.x
-        val z: Double = enemy.z - fakePlayer.z
-
-        var yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat()
-        if (z < 0.0 && x < 0.0) yaw = (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-        else if (z < 0.0 && x > 0.0) yaw = (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-        return yaw
+        return perception.yawTowardsNearestEnemy()
     }
 
     private fun distanceAwayFromEnemies(): Double {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-
-        return world.entities
-            .minOfOrNull {
-                if (it is ClientLivingEntity && !clientInstance.configuration.friendlyUUIDs.contains(it.uuid))
-                    it.distance2DTo(fakePlayer.x, fakePlayer.z)
-                else Double.MAX_VALUE
-            } ?: Double.MAX_VALUE
+        return perception.distanceToNearestEnemy(horizontal = true)
     }
 
     private fun closestEnemy(): ClientPlayer? {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-        val targetSearchRange = clientInstance.configuration.targetSearchRange
-        var bestTarget: ClientPlayer? = null
-        var closestDistance = Double.MAX_VALUE
-
-        for (entity in world.entities) {
-            if (entity is ClientPlayer &&
-                !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid)
-            ) {
-                val distance = fakePlayer.distance3DTo(entity)
-                if (distance <= targetSearchRange && distance < closestDistance) {
-                    bestTarget = entity
-                    closestDistance = distance
-                }
-            }
-        }
-        return bestTarget
+        return perception.bestTarget()?.entity
     }
 
     private fun isAtWall(): Boolean {

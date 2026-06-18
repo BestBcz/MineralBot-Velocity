@@ -1,9 +1,9 @@
 package gg.mineral.bot.ai.goal.practice
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
-import gg.mineral.bot.api.entity.living.ClientLivingEntity
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.event.entity.EntityHurtEvent
 import gg.mineral.bot.api.event.peripherals.MouseButtonEvent
@@ -35,6 +35,7 @@ class SafeEatGoal(clientInstance: ClientInstance) :
     private var comboDetected = false
     private var hitsTaken = 0
     private var lastEatTick = 0
+    private val perception = CombatPerception(clientInstance)
 
     override fun shouldExecute(): Boolean {
         if (clientInstance.currentTick - lastEatTick < 30) return false
@@ -61,32 +62,12 @@ class SafeEatGoal(clientInstance: ClientInstance) :
     }
 
     private fun distanceAwayFromEnemies(): Double {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-
-        return world.entities.minOfOrNull {
-            if (it is ClientLivingEntity &&
-                            !clientInstance.configuration.friendlyUUIDs.contains(it.uuid)
-            )
-                    it.distance3DTo(fakePlayer)
-            else Double.MAX_VALUE
-        }
-                ?: Double.MAX_VALUE
+        return perception.snapshot().nearestEnemy?.distance3D ?: Double.MAX_VALUE
     }
 
     private fun angleAwayFromEnemies(): Float {
         val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-
-        val enemy =
-                world.entities.minByOrNull {
-                    if (it is ClientLivingEntity &&
-                                    !clientInstance.configuration.friendlyUUIDs.contains(it.uuid)
-                    )
-                            it.distance3DTo(fakePlayer)
-                    else Double.MAX_VALUE
-                }
-                        ?: return fakePlayer.yaw
+        val enemy = perception.snapshot().nearestEnemy ?: return fakePlayer.yaw
         val x: Double = enemy.x - fakePlayer.x
         val z: Double = enemy.z - fakePlayer.z
 

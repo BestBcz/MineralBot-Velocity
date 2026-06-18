@@ -1,9 +1,9 @@
 package gg.mineral.bot.ai.goal
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
-import gg.mineral.bot.api.entity.living.ClientLivingEntity
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.event.peripherals.MouseButtonEvent
 import gg.mineral.bot.api.goal.Sporadic
@@ -17,11 +17,17 @@ class EatFoodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance
     override var startTime: Long = 0
     override val maxDuration: Long = 100
     private var eating = false
+    private val perception = CombatPerception(clientInstance)
 
     override fun shouldExecute(): Boolean {
         val fakePlayer = clientInstance.fakePlayer
         // TODO: config how conservative to be with food
-        val shouldExecute = hasFood() && fakePlayer.hunger < 19 && fakePlayer.health > 16.0
+        val enemy = perception.nearestEnemy()
+        val hasSafeWindow = enemy == null ||
+            !enemy.lineOfSightLikelyClear ||
+            enemy.distance3D > 8.0 ||
+            (!enemy.pressuringSelf && enemy.distance3D > 5.0)
+        val shouldExecute = hasFood() && fakePlayer.hunger < 19 && fakePlayer.health > 16.0 && hasSafeWindow
         logger.debug("Checking shouldExecute: $shouldExecute")
         return shouldExecute
     }
@@ -45,34 +51,11 @@ class EatFoodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance
     }
 
     private fun angleAwayFromEnemies(): Float {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-
-        val enemy = world.entities
-            .minByOrNull {
-                if (it is ClientLivingEntity && !clientInstance.configuration.friendlyUUIDs.contains(it.uuid))
-                    it.distance3DTo(fakePlayer)
-                else Double.MAX_VALUE
-            } ?: return fakePlayer.yaw
-        val x: Double = enemy.x - fakePlayer.x
-        val z: Double = enemy.z - fakePlayer.z
-
-        var yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat()
-        if (z < 0.0 && x < 0.0) yaw = (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-        else if (z < 0.0 && x > 0.0) yaw = (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-        return yaw + 180.0f
+        return perception.safeYawAwayFromNearestEnemy()
     }
 
     private fun distanceAwayFromEnemies(): Double {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-
-        return world.entities
-            .minOfOrNull {
-                if (it is ClientLivingEntity && !clientInstance.configuration.friendlyUUIDs.contains(it.uuid))
-                    it.distance3DTo(fakePlayer)
-                else Double.MAX_VALUE
-            } ?: Double.MAX_VALUE
+        return perception.distanceToNearestEnemy()
     }
 
     private fun getFoodSlot(): Int {

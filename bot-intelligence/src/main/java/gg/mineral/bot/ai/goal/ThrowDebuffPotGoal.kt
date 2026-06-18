@@ -1,10 +1,10 @@
 package gg.mineral.bot.ai.goal
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
 import gg.mineral.bot.api.entity.effect.PotionEffectType
-import gg.mineral.bot.api.entity.living.ClientLivingEntity
 import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.entity.living.player.FakePlayer
 import gg.mineral.bot.api.event.Event
@@ -33,6 +33,7 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     override var executing: Boolean = false
     private var lastPotTick = 0
     private var effects: Set<Int> = emptySet()
+    private val perception = CombatPerception(clientInstance)
     override val suspend: Boolean
         get() = clientInstance.currentScreen !is ContainerScreen && !shouldExecute()
 
@@ -41,7 +42,7 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
 
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
-        val closestEnemy = closestEnemy() ?: return false
+        val closestEnemy = closestEnemyState() ?: return false
 
         val debuffEffects = setOf(
             PotionEffectType.HARM.id,
@@ -53,14 +54,14 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             PotionEffectType.SLOW_DIGGING.id
         )
 
-        val effects = debuffEffects.subtract(closestEnemy.activePotionEffectIds.toSet())
+        val effects = debuffEffects.subtract(closestEnemy.activePotionEffectIds)
         if (effects.isEmpty()) return false
 
         return (inventory.containsPotion {
             it.effects.any { effect ->
                 effects.contains(effect.potionID)
             }
-        } && closestEnemy.distance3DToSq(fakePlayer) in 25.0..64.0).apply {
+        } && closestEnemy.lineOfSightLikelyClear && closestEnemy.distance3D * closestEnemy.distance3D in 25.0..64.0).apply {
             if (this) this@ThrowDebuffPotGoal.effects = effects
         }
     }
@@ -71,43 +72,15 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     }
 
     private fun angleTowardsEnemies(): Float {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
+        return perception.yawTowardsNearestEnemy()
+    }
 
-        val enemy = world.entities
-            .minByOrNull {
-                if (it is ClientLivingEntity && !clientInstance.configuration.friendlyUUIDs.contains(it.uuid))
-                    it.distance3DTo(fakePlayer)
-                else Double.MAX_VALUE
-            } ?: return fakePlayer.yaw
-        val x: Double = enemy.x - fakePlayer.x
-        val z: Double = enemy.z - fakePlayer.z
-
-        var yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat()
-        if (z < 0.0 && x < 0.0) yaw = (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-        else if (z < 0.0 && x > 0.0) yaw = (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-        return yaw
+    private fun closestEnemyState(): CombatPerception.PlayerState? {
+        return perception.bestTarget()
     }
 
     private fun closestEnemy(): ClientPlayer? {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-        val targetSearchRange = clientInstance.configuration.targetSearchRange
-        var bestTarget: ClientPlayer? = null
-        var closestDistance = Double.MAX_VALUE
-
-        for (entity in world.entities) {
-            if (entity is ClientPlayer && entity != fakePlayer &&
-                !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid)
-            ) {
-                val distance = fakePlayer.distance3DTo(entity)
-                if (distance <= targetSearchRange && distance < closestDistance) {
-                    bestTarget = entity
-                    closestDistance = distance
-                }
-            }
-        }
-        return bestTarget
+        return closestEnemyState()?.entity
     }
 
     // Extension functions for adjusting the bot’s aim.

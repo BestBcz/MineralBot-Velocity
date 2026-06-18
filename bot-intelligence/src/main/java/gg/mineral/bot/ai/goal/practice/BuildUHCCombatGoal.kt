@@ -1,6 +1,7 @@
 package gg.mineral.bot.ai.goal.practice
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
 import gg.mineral.bot.api.entity.effect.PotionEffectType
@@ -39,6 +40,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     private var placedLavaZ = Double.NaN
     private var eatState = EatState.NONE
     private var eatStartTick = -1
+    private val perception = CombatPerception(clientInstance)
 
     private enum class WaterState {
         IDLE,
@@ -60,7 +62,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (isEatingApple()) return true
 
         val fakePlayer = clientInstance.fakePlayer
-        val enemy = getClosestEnemy()
+        val enemyState = getClosestEnemyState()
 
         if (needsEmergencyWater()) return true
 
@@ -68,19 +70,23 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (!preFightGappleUsed &&
                 clientInstance.currentTick - matchStartTick >= 80 &&
                 hasNormalGapple() &&
-                (enemy == null || fakePlayer.distance3DTo(enemy) > 10.0)
+                (enemyState == null || enemyState.distance3D > 10.0)
         ) {
             return true
         }
 
-        enemy ?: return false
-        val distance = fakePlayer.distance3DTo(enemy)
+        enemyState ?: return false
+        val distance = enemyState.distance3D
 
         if (needsGoldenHead() && canEatHeadNow(fakePlayer.health)) return true
         if (needsGoldenApple() && fakePlayer.health < GAPPLE_EAT_THRESHOLD && canEatGappleNow(fakePlayer.health)) return true
         if (shouldRecoverPlacedFluid()) return true
 
-        return hasLava() && distance in 1.9..5.3 && fakePlayer.isOnGround && !allBucketsEmpty()
+        return hasLava() &&
+                distance in 1.9..5.3 &&
+                fakePlayer.isOnGround &&
+                !allBucketsEmpty() &&
+                enemyState.lineOfSightLikelyClear
     }
 
     override fun onStart() {
@@ -166,24 +172,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return false
     }
 
-    private fun getClosestEnemy(): ClientPlayer? {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-        val targetSearchRange = clientInstance.configuration.targetSearchRange
-
-        var closestTarget: ClientPlayer? = null
-        var closestDistance = Double.MAX_VALUE
-
-        for (entity in world.entities) {
-            if (entity is ClientPlayer && !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid)) {
-                val distance = fakePlayer.distance3DTo(entity)
-                if (distance <= targetSearchRange && distance < closestDistance) {
-                    closestDistance = distance
-                    closestTarget = entity
-                }
-            }
-        }
-        return closestTarget
+    private fun getClosestEnemyState(): CombatPerception.PlayerState? {
+        return perception.bestTarget()
     }
 
     private fun getLavaSlot(): Int {
@@ -232,11 +222,15 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (clientInstance.currentTick - lastLavaPlaceTick < 100) return false
         if (!hasLava()) return false
 
-        val enemy = getClosestEnemy() ?: return false
+        val enemy = getClosestEnemyState() ?: return false
         val fakePlayer = clientInstance.fakePlayer
-        val distance = fakePlayer.distance3DTo(enemy)
+        val distance = enemy.distance3D
 
-        return distance >= 1.9 && distance <= 5.3 && fakePlayer.isOnGround && !allBucketsEmpty()
+        return distance >= 1.9 &&
+                distance <= 5.3 &&
+                fakePlayer.isOnGround &&
+                !allBucketsEmpty() &&
+                enemy.lineOfSightLikelyClear
     }
 
     private fun allBucketsEmpty(): Boolean {
@@ -308,7 +302,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     private fun handleOngoingEat(
         tick: Tick,
         inventory: gg.mineral.bot.api.inv.Inventory,
-        enemy: ClientPlayer?
+        enemy: CombatPerception.PlayerState?
     ): Boolean {
         if (!isEatingApple()) return false
 
@@ -335,13 +329,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         tick.execute {
             pressButton(MouseButton.Type.RIGHT_CLICK)
             keepForward()
-            if (enemy != null && clientInstance.fakePlayer.distance3DTo(enemy) < 12.0) {
-                val x = enemy.x - clientInstance.fakePlayer.x
-                val z = enemy.z - clientInstance.fakePlayer.z
-                var yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat()
-                if (z < 0.0 && x < 0.0) yaw = (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-                else if (z < 0.0 && x > 0.0) yaw = (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-                setMouseYaw(yaw + 180.0f)
+            if (enemy != null && enemy.distance3D < 12.0) {
+                setMouseYaw(perception.safeYawAwayFromNearestEnemy())
             }
         }
 
@@ -353,11 +342,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return true
     }
 
-    private fun isSafeToEat(enemy: ClientPlayer?): Boolean {
+    private fun isSafeToEat(enemy: CombatPerception.PlayerState?): Boolean {
         val fakePlayer = clientInstance.fakePlayer
         if (enemy == null) return true
         if (fakePlayer.health <= 2.5f) return true
-        return fakePlayer.distance3DTo(enemy) >= 4.4
+        return enemy.distance3D >= 4.4 && (!enemy.pressuringSelf || enemy.distance3D >= 6.2)
     }
 
     private fun getRodSlot(): Int {
@@ -369,7 +358,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return -1
     }
 
-    private fun tryCreateEatWindow(tick: Tick, enemy: ClientPlayer, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
+    private fun tryCreateEatWindow(
+        tick: Tick,
+        enemy: CombatPerception.PlayerState,
+        inventory: gg.mineral.bot.api.inv.Inventory
+    ): Boolean {
         val rodSlot = getRodSlot()
         if (rodSlot == -1) return false
 
@@ -383,13 +376,12 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
         tick.execute {
             val bot = clientInstance.fakePlayer
-            val lateralBoost = (enemy.x - enemy.lastX) * 3.2
-            val forwardBoost = (enemy.z - enemy.lastZ) * 3.2
-            val predictedX = enemy.x + lateralBoost
-            val predictedY = enemy.y + enemy.eyeHeight * 0.57
-            val predictedZ = enemy.z + forwardBoost
+            val leadTicks = if (enemy.movingTowardSelf) 1.6 else 2.4
+            val predictedX = enemy.x + enemy.velocityX * leadTicks
+            val predictedY = enemy.y + enemy.entity.eyeHeight * 0.57
+            val predictedZ = enemy.z + enemy.velocityZ * leadTicks
 
-            val predictedEnemy = object : ClientPlayer by enemy {
+            val predictedEnemy = object : ClientPlayer by enemy.entity {
                 override val x: Double get() = predictedX
                 override val y: Double get() = predictedY
                 override val z: Double get() = predictedZ
@@ -530,7 +522,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     override fun onTick(tick: Tick) {
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
-        val enemy = getClosestEnemy()
+        val enemy = getClosestEnemyState()
         var actionTaken = false
 
         keepForward()
@@ -553,7 +545,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (!preFightGappleUsed &&
                 clientInstance.currentTick - matchStartTick >= 80 &&
                 hasNormalGapple() &&
-                (enemy == null || fakePlayer.distance3DTo(enemy) > 10.0)
+                (enemy == null || enemy.distance3D > 10.0)
         ) {
             val openerGapple = getGoldenAppleSlot(preferHead = false)
             if (openerGapple != -1) {
@@ -639,8 +631,15 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                     selectHotbarSlot(resolveHotbarSlot(lavaSlot))
                 }
                 tick.execute {
-                    val midX = (fakePlayer.x + enemy.x) / 2
-                    val midZ = (fakePlayer.z + enemy.z) / 2
+                    val predictedEnemyX = enemy.x + enemy.velocityX * 0.6
+                    val predictedEnemyZ = enemy.z + enemy.velocityZ * 0.6
+                    val midX = (fakePlayer.x + predictedEnemyX) / 2
+                    val midZ = (fakePlayer.z + predictedEnemyZ) / 2
+                    val terrain = perception.terrainAt(midX, midZ)
+                    if (terrain.dropAhead || terrain.lavaAhead) {
+                        return@execute
+                    }
+
                     val x = midX - fakePlayer.x
                     val z = midZ - fakePlayer.z
 

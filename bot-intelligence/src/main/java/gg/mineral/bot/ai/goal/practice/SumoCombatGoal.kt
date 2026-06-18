@@ -1,17 +1,14 @@
 package gg.mineral.bot.ai.goal.practice
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
-import gg.mineral.bot.api.entity.living.ClientLivingEntity
 import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.event.entity.EntityHurtEvent
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.instance.ClientInstance
-import gg.mineral.bot.api.inv.item.Item
-import gg.mineral.bot.api.screen.type.ContainerScreen
-import gg.mineral.bot.api.world.block.Block
 
 /**
  * Advanced Sumo Combat Goal for pushing enemies off platforms.
@@ -24,7 +21,8 @@ import gg.mineral.bot.api.world.block.Block
  */
 class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic {
     override var executing: Boolean = false
-    
+
+    private val perception = CombatPerception(clientInstance)
     private var target: ClientPlayer? = null
     private var lastTargetSwitchTick = 0
     private var lastSprintResetTick = 0
@@ -32,17 +30,17 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     private var strafeLockedUntilTick = -1
     private var forwardSuppressedUntilTick = -1
     private var comboCount = 0
-    
+
     private val meanDelay = (1000 / clientInstance.configuration.averageCps).toLong()
     private val deviation = kotlin.math.abs((1000 / (clientInstance.configuration.averageCps + 1)).toLong() - meanDelay)
     private var nextClick: Long = 0
-    
+
     // Edge detection
     private var isNearEdge = false
     private var edgeDirection = 0f
-    
+
     override fun shouldExecute(): Boolean = true
-    
+
     override fun onStart() {
         forwardSuppressedUntilTick = -1
         strafeDirection = 0
@@ -76,64 +74,52 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         strafeLockedUntilTick = -1
         unpressKey(Key.Type.KEY_A, Key.Type.KEY_D)
     }
-    
+
     private fun findTarget() {
         val targetSearchRange = clientInstance.configuration.targetSearchRange
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-        val entities = world.entities
-        
-        if (clientInstance.currentTick - lastTargetSwitchTick < 20 && target?.let {
-                entities.contains(it) && isTargetValid(it, targetSearchRange.toFloat())
-            } == true) return
-        
-        var closestTarget: ClientPlayer? = null
-        var closestDistance = Double.MAX_VALUE
-        
-        for (entity in entities) {
-            if (entity is ClientPlayer) {
-                if (isTargetValid(entity, targetSearchRange.toFloat())) {
-                    val distance = fakePlayer.distance3DTo(entity)
-                    if (distance < closestDistance) {
-                        closestDistance = distance
-                        closestTarget = entity
-                    }
-                }
+        val snapshot = perception.snapshot()
+
+        if (clientInstance.currentTick - lastTargetSwitchTick < 20) {
+            val currentTargetState = snapshot.stateFor(target)
+            if (currentTargetState != null && currentTargetState.distance3D <= targetSearchRange) {
+                return
             }
         }
-        
-        if (closestTarget !== this.target) {
+
+        val nextTarget = snapshot.bestTargetState(target, targetSearchRange.toDouble())?.entity
+
+        if (nextTarget !== this.target) {
             lastTargetSwitchTick = clientInstance.currentTick
-            this.target = closestTarget
+            this.target = nextTarget
         }
     }
-    
-    private fun isTargetValid(entity: ClientLivingEntity, range: Float): Boolean {
-        val fakePlayer = clientInstance.fakePlayer
-        return !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid) &&
-               fakePlayer.distance3DTo(entity) <= range &&
-               entity is ClientPlayer
-    }
-    
+
     private fun aimAtTarget() {
         val target = this.target ?: return
         val fakePlayer = clientInstance.fakePlayer
-        val optimalAngles = computeOptimalYawAndPitch(fakePlayer, target)
+        val targetState = perception.snapshot().stateFor(target)
+        val aimTarget =
+            if (targetState == null) target
+            else object : ClientPlayer by target {
+                override val x: Double get() = targetState.x + targetState.velocityX * 0.18
+                override val z: Double get() = targetState.z + targetState.velocityZ * 0.18
+            }
+        val optimalAngles = computeOptimalYawAndPitch(fakePlayer, aimTarget)
         
         val config = clientInstance.configuration
         val yawSpeed = config.horizontalAimSpeed * 3.0f
         val pitchSpeed = config.verticalAimSpeed * 3.0f
-        
+
         setMouseYaw(getRotationTarget(fakePlayer.yaw, optimalAngles[1], yawSpeed, config.horizontalAimAccuracy))
         setMousePitch(getRotationTarget(fakePlayer.pitch, optimalAngles[0], pitchSpeed, config.verticalAimAccuracy))
     }
-    
+
     private fun getRotationTarget(current: Float, target: Float, turnSpeed: Float, accuracy: Float): Float {
         val difference = angleDifference(current, target)
-        
+
         if (abs(difference.toDouble()) > turnSpeed) return current + signum(difference) * turnSpeed
         if (accuracy >= 1) return target
-        
+
         val deviation = 3f / max(0.01f, accuracy)
         val fakePlayer = clientInstance.fakePlayer
         return fakePlayer.random.nextGaussian(target.toDouble(), deviation.toDouble()).toFloat()
@@ -143,67 +129,20 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
      * Check if the bot is near an edge (void/water below).
      */
     private fun checkEdge(): Boolean {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-        
-        // Check blocks below in front and sides
-        val checkDistance = 1.5
-        val directions = arrayOf(
-            vectorForRotation(0f, fakePlayer.yaw),  // Front
-            vectorForRotation(0f, fakePlayer.yaw + 90),  // Right
-            vectorForRotation(0f, fakePlayer.yaw - 90),  // Left
-            vectorForRotation(0f, fakePlayer.yaw + 180)  // Back
-        )
-        
-        var nearestEdgeDir = -1
-        var nearestEdgeDist = Double.MAX_VALUE
-        
-        for ((index, dir) in directions.withIndex()) {
-            val checkX = fakePlayer.x + dir[0] * checkDistance
-            val checkZ = fakePlayer.z + dir[2] * checkDistance
-            
-            // Check if there's a block below at this position
-            var hasGround = false
-            for (y in 0..5) {
-                val block = world.getBlockAt(checkX, fakePlayer.y - y, checkZ)
-                if (block.id != Block.AIR) {
-                    hasGround = true
-                    break
-                }
-            }
-            
-            if (!hasGround) {
-                val dist = sqrt(dir[0] * dir[0] + dir[2] * dir[2])
-                if (dist < nearestEdgeDist) {
-                    nearestEdgeDir = index
-                    nearestEdgeDist = dist
-                }
-            }
-        }
-        
-        if (nearestEdgeDir >= 0) {
-            isNearEdge = true
-            edgeDirection = when (nearestEdgeDir) {
-                0 -> fakePlayer.yaw + 180  // Edge in front, face away
-                1 -> fakePlayer.yaw - 90   // Edge on right, go left
-                2 -> fakePlayer.yaw + 90   // Edge on left, go right
-                else -> fakePlayer.yaw     // Edge behind, keep facing forward
-            }
-            return true
-        }
-        
-        isNearEdge = false
-        return false
+        val edge = perception.edgeProbe()
+        isNearEdge = edge.nearEdge
+        edgeDirection = edge.safeYaw
+        return edge.nearEdge
     }
-    
+
     /**
      * Sumo-specific strafing - more aggressive, focuses on knockback positioning.
      */
     private fun strafe() {
         val target = this.target ?: return
         val fakePlayer = clientInstance.fakePlayer
-        val distance = fakePlayer.distance3DTo(target)
-        
+        val distance = perception.snapshot().stateFor(target)?.distance3D ?: fakePlayer.distance3DTo(target)
+
         // If near edge, prioritize moving away from edge
         if (isNearEdge) {
             releaseStrafe()
@@ -211,15 +150,15 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
             maintainForwardMovement()
             return
         }
-        
+
         if (!fakePlayer.isOnGround || distance > 3.5) {
             releaseStrafe()
             return
         }
-        
+
         // Circle strafe for positioning advantage
         strafeDirection = lockedStrafeDirection(target)
-        
+
         when (strafeDirection.toInt()) {
             1 -> {
                 unpressKey(Key.Type.KEY_D)
@@ -231,17 +170,18 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
             }
         }
     }
-    
+
     private fun calculateStrafeDirection(target: ClientPlayer): Byte {
         val fakePlayer = clientInstance.fakePlayer
+        val targetState = perception.snapshot().stateFor(target)
         val toPlayer = doubleArrayOf(
             fakePlayer.x - target.x,
             fakePlayer.y - target.y,
             fakePlayer.z - target.z
         )
-        val aimVector = vectorForRotation(target.pitch, target.yaw)
+        val aimVector = vectorForRotation(target.pitch, targetState?.yaw ?: target.yaw)
         val crossProduct = (toPlayer[0] * aimVector[2] - toPlayer[2] * aimVector[0]).toFloat()
-        
+
         return if (crossProduct > 0) 2.toByte() else 1.toByte()
     }
 
@@ -253,7 +193,7 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         }
         return strafeDirection
     }
-    
+
     /**
      * W-tap for sprint reset - critical for Sumo knockback combos.
      */
@@ -261,66 +201,66 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         val target = this.target ?: return
         val fakePlayer = clientInstance.fakePlayer
         val distance = fakePlayer.distance3DTo(target)
-        
+
         // Only w-tap when in range and on ground
         if (distance > 4.0 || !fakePlayer.isOnGround) return
-        
+
         val config = clientInstance.configuration
-        
+
         if (config.sprintResetAccuracy >= 1 || fakePlayer.random.nextFloat() < config.sprintResetAccuracy) {
             suppressForwardFor(2)
         }
     }
-    
+
     private fun attackTarget() {
         val fakePlayer = clientInstance.fakePlayer
         nextClick = (timeMillis() + fakePlayer.random.nextGaussian(meanDelay.toDouble(), deviation.toDouble())).toLong()
         pressButton(25, MouseButton.Type.LEFT_CLICK)
     }
-    
+
     override fun onTick(tick: Tick) {
         maintainForwardMovement()
-        
+
         tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
-        
+
         tick.execute {
             checkEdge()
             findTarget()
             aimAtTarget()
         }
     }
-    
+
     override fun onEvent(event: Event): Boolean {
         if (event is EntityHurtEvent) return onEntityHurt(event)
         return false
     }
-    
+
     private fun onEntityHurt(event: EntityHurtEvent): Boolean {
         if (clientInstance.currentTick - lastSprintResetTick < 8) return false
-        
+
         val entity = event.attackedEntity
         val fakePlayer = clientInstance.fakePlayer
         val target = this.target
-        
+
         if (target != null && entity.uuid == target.uuid) {
             comboCount++
             wtap()
             lastSprintResetTick = clientInstance.currentTick
         }
-        
+
         // Reset combo if we got hit
         if (entity.uuid == fakePlayer.uuid) {
             comboCount = 0
         }
-        
+
         return false
     }
-    
+
     override fun onEnd() {
     }
-    
+
     override fun onGameLoop() {
         strafe()
         if (timeMillis() >= nextClick) attackTarget()

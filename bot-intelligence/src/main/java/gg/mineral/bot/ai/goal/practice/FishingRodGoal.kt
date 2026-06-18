@@ -1,15 +1,14 @@
 package gg.mineral.bot.ai.goal.practice
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
-import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.item.Item
-import gg.mineral.bot.api.screen.type.ContainerScreen
 
 /**
  * Fishing Rod Combat Goal for creating distance advantages.
@@ -25,6 +24,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
     override var startTime: Long = 0
     override val maxDuration: Long = 12
 
+    private val perception = CombatPerception(clientInstance)
     private var lastRodTick = 0
     private var rodState = RodState.IDLE
 
@@ -43,8 +43,8 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
         if (!inventory.contains(Item.FISHING_ROD)) return false
 
-        val enemy = getClosestEnemy() ?: return false
-        val distance = fakePlayer.distance3DTo(enemy)
+        val enemy = getClosestEnemyState() ?: return false
+        val distance = enemy.distance3D
 
         return distance >= config.rodMinRange && distance <= config.rodMaxRange
     }
@@ -53,26 +53,9 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         rodState = RodState.IDLE
     }
 
-    private fun getClosestEnemy(): ClientPlayer? {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
+    private fun getClosestEnemyState(): CombatPerception.PlayerState? {
         val targetSearchRange = clientInstance.configuration.targetSearchRange
-
-        var closestTarget: ClientPlayer? = null
-        var closestDistance = Double.MAX_VALUE
-
-        for (entity in world.entities) {
-            if (entity is ClientPlayer &&
-                            !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid)
-            ) {
-                val distance = fakePlayer.distance3DTo(entity)
-                if (distance <= targetSearchRange && distance < closestDistance) {
-                    closestDistance = distance
-                    closestTarget = entity
-                }
-            }
-        }
-        return closestTarget
+        return perception.snapshot().bestTargetState(null, targetSearchRange.toDouble())
     }
 
     private fun getRodSlot(): Int {
@@ -122,19 +105,20 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         val rodSlot = getRodSlot()
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
-        val enemy = getClosestEnemy()
+        val enemyState = getClosestEnemyState()
+        val enemy = enemyState?.entity
 
         tick.finishIf("No Rod Found", rodSlot == -1)
         tick.finishIf("No Enemy", enemy == null)
 
-        enemy ?: return
+        if (enemy == null || enemyState == null) return
 
         tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
 
         // Enemy in hit range -> immediately hand control back to melee goal.
-        val distance = fakePlayer.distance3DTo(enemy)
+        val distance = enemyState.distance3D
         if (distance <= clientInstance.configuration.rodCancelRange) {
             tick.execute {
                 switchBackToMelee(inventory)
@@ -156,15 +140,15 @@ class FishingRodGoal(clientInstance: ClientInstance) :
             RodState.IDLE -> {
                 val config = clientInstance.configuration
                 // Aim at enemy with prediction
-                val predictedX = enemy.x + (enemy.x - enemy.lastX) * config.rodPredictionMultiplier
-                val predictedZ = enemy.z + (enemy.z - enemy.lastZ) * config.rodPredictionMultiplier
+                val predictedX = enemyState.x + enemyState.velocityX * config.rodPredictionMultiplier
+                val predictedZ = enemyState.z + enemyState.velocityZ * config.rodPredictionMultiplier
 
                 val dx = predictedX - fakePlayer.x
                 val dz = predictedZ - fakePlayer.z
                 val targetY =
-                        if (enemy.isOnGround)
-                                enemy.y - 0.83
-                        else enemy.y + enemy.eyeHeight * 0.62
+                        if (enemyState.onGround)
+                                enemyState.y - 0.83
+                        else enemyState.y + enemy.eyeHeight * 0.62
                 val dy = targetY - (fakePlayer.y + fakePlayer.eyeHeight)
 
                 val horizDist = sqrt(dx * dx + dz * dz).coerceAtLeast(0.001)
@@ -182,7 +166,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
                 // Keep rod aim lower for grounded targets, but a bit higher if enemy is airborne.
                 val basePitch = Math.toDegrees(-fastArcTan(dy / horizDist)).toFloat()
                 val downwardBias =
-                        ((horizDist / 8.0).coerceIn(5.0, 15.0) - if (enemy.isOnGround) 0.0 else 2.0)
+                        ((horizDist / 8.0).coerceIn(5.0, 15.0) - if (enemyState.onGround) 0.0 else 2.0)
                                 .toFloat()
                 val pitch = (basePitch + downwardBias + config.rodPitchBias).coerceIn(-20f, 36f)
 

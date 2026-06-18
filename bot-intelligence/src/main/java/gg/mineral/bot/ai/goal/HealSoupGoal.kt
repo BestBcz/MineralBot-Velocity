@@ -1,9 +1,9 @@
 package gg.mineral.bot.ai.goal
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
-import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
@@ -15,6 +15,7 @@ class HealSoupGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstanc
     override val maxDuration: Long = 100
     override var startTime: Long = 0
     override var executing: Boolean = false
+    private val perception = CombatPerception(clientInstance)
 
     override fun shouldExecute(): Boolean {
         val fakePlayer = clientInstance.fakePlayer
@@ -33,25 +34,8 @@ class HealSoupGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstanc
      * The criteria here is similar to the melee combat goal – the closest enemy
      * that is not marked as friendly.
      */
-    private fun getOptimalTarget(): ClientPlayer? {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-        val targetSearchRange = clientInstance.configuration.targetSearchRange
-        var bestTarget: ClientPlayer? = null
-        var closestDistance = Double.MAX_VALUE
-
-        for (entity in world.entities) {
-            if (entity is ClientPlayer &&
-                !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid)
-            ) {
-                val distance = fakePlayer.distance3DTo(entity)
-                if (distance <= targetSearchRange && distance < closestDistance) {
-                    bestTarget = entity
-                    closestDistance = distance
-                }
-            }
-        }
-        return bestTarget
+    private fun getOptimalTarget(): CombatPerception.PlayerState? {
+        return perception.bestTarget()
     }
 
     /**
@@ -60,7 +44,8 @@ class HealSoupGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstanc
      */
     private fun aimAtOptimalTarget() {
         val fakePlayer = clientInstance.fakePlayer
-        val target = getOptimalTarget() ?: return
+        val targetState = getOptimalTarget() ?: return
+        val target = perception.predictedPlayer(targetState, if (targetState.movingTowardSelf) 0.7 else 0.35)
         val optimalAngles = computeOptimalYawAndPitch(fakePlayer, target)
         setMouseYaw(optimalAngles[1])
         setMousePitch(optimalAngles[0])
