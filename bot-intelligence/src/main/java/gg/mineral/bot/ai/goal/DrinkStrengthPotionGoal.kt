@@ -17,16 +17,29 @@ import gg.mineral.bot.api.inv.potion.Potion
 import gg.mineral.bot.api.screen.type.ContainerScreen
 
 class DrinkStrengthPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
+    private companion object {
+        const val REFRESH_WINDOW_TICKS = 30 * 20
+    }
+
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val maxDuration: Long = 100
     private var drinking = false
+    private var drinkWindowStartTick = -1
     private val perception = CombatPerception(clientInstance)
 
     override fun shouldExecute(): Boolean {
-        val enemy = perception.nearestVisibleEnemy()
-        val hasWindow = enemy != null && (enemy.distance3D >= 4.2 || !enemy.pressuringSelf)
-        val shouldExecute = hasWindow && hasStrengthPotion() && !hasStrengthEffect()
+        if (!hasStrengthPotion() || !strengthNeedsRefresh()) {
+            drinkWindowStartTick = -1
+            logger.debug("Checking shouldExecute: false")
+            return false
+        }
+
+        if (drinkWindowStartTick == -1) {
+            drinkWindowStartTick = clientInstance.currentTick
+        }
+
+        val shouldExecute = canDrinkInWindow()
         logger.debug("Checking shouldExecute: $shouldExecute")
         return shouldExecute
     }
@@ -41,11 +54,32 @@ class DrinkStrengthPotionGoal(clientInstance: ClientInstance) : InventoryGoal(cl
         return fakePlayer.activePotionEffectIds.any { it == PotionEffectType.INCREASE_DAMAGE.id }
     }
 
+    private fun strengthRemainingTicks(): Int? {
+        return clientInstance.fakePlayer.clientActivePotionEffects
+            .firstOrNull { it.potionID == PotionEffectType.INCREASE_DAMAGE.id }
+            ?.duration
+    }
+
+    private fun strengthNeedsRefresh(): Boolean {
+        if (!hasStrengthEffect()) return true
+        return strengthRemainingTicks()?.let { it <= REFRESH_WINDOW_TICKS } == true
+    }
+
     private fun hasStrengthPotion(): Boolean {
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
 
         return inventory.containsPotion { isStrengthPotion(it) }
+    }
+
+    private fun canDrinkInWindow(): Boolean {
+        val enemy = perception.nearestVisibleEnemy() ?: return true
+        val waitedTicks = if (drinkWindowStartTick == -1) 0 else clientInstance.currentTick - drinkWindowStartTick
+
+        return enemy.distance3D >= 6.0 ||
+            (!enemy.pressuringSelf && enemy.distance3D >= 3.8) ||
+            (waitedTicks >= 60 && enemy.distance3D >= 3.4 && !enemy.movingTowardSelf) ||
+            (waitedTicks >= 120 && enemy.distance3D >= 3.0 && !enemy.lookingAtSelf)
     }
 
     private fun angleAwayFromEnemies(): Float {
@@ -100,7 +134,7 @@ class DrinkStrengthPotionGoal(clientInstance: ClientInstance) : InventoryGoal(cl
 
         tick.finishIf("Not holding strength potion", inventory.heldItemStack?.let { isStrengthPotion(it) } == false)
 
-        tick.finishIf("Strength effect already active", hasStrengthEffect())
+        tick.finishIf("Strength potion not needed", !drinking && !strengthNeedsRefresh())
 
         tick.prerequisite("Drinking", drinking && getButton(MouseButton.Type.RIGHT_CLICK).isPressed) {
             pressButton(MouseButton.Type.RIGHT_CLICK)
@@ -123,11 +157,12 @@ class DrinkStrengthPotionGoal(clientInstance: ClientInstance) : InventoryGoal(cl
 
     override fun debugSummary(): String {
         val heldItem = clientInstance.fakePlayer.inventory.heldItemStack?.let { "${it.item.id}:${it.durability}x${it.count}" } ?: "empty"
-        return "drinking=$drinking,hasStrengthEffect=${hasStrengthEffect()},hasStrengthPotion=${hasStrengthPotion()},held=$heldItem"
+        return "drinking=$drinking,hasStrengthEffect=${hasStrengthEffect()},strengthRemaining=${strengthRemainingTicks() ?: -1},hasStrengthPotion=${hasStrengthPotion()},windowTicks=${clientInstance.currentTick - drinkWindowStartTick},held=$heldItem"
     }
 
     override fun onEnd() {
         drinking = false
+        drinkWindowStartTick = -1
         unpressButton(MouseButton.Type.RIGHT_CLICK)
         unpressKey(Key.Type.KEY_SPACE)
     }

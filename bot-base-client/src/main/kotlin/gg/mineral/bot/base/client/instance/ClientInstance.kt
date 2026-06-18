@@ -483,6 +483,7 @@ open class ClientInstance(
                 override val hunger = 20f
                 override val headY = 0.0
                 override val activePotionEffectIds = intArrayOf()
+                override val clientActivePotionEffects = emptyList<gg.mineral.bot.api.entity.effect.PotionEffect>()
                 override fun isPotionActive(potionId: Int): Boolean = false
                 override val health = 0f
                 override val uuid = configuration.uuid

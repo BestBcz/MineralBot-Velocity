@@ -4,6 +4,7 @@ import gg.mineral.bot.ai.goal.type.InventoryGoal
 import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
+import gg.mineral.bot.api.entity.effect.PotionEffectType
 import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.entity.living.player.FakePlayer
 import gg.mineral.bot.api.event.Event
@@ -36,18 +37,29 @@ import kotlin.math.atan2
 
 
 class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Suspendable, Sporadic, Timebound {
+    private companion object {
+        const val SPEED_MISSING_ESCAPE_TICKS = 5 * 20
+        const val AGGRO_ESCAPE_MAX_DISTANCE = 5.8
+        const val AGGRO_ESCAPE_MIN_HEALTH = 4.0f
+        const val RETREAT_MIN_LANDING_DISTANCE = 4.0
+        const val RETREAT_MAX_LANDING_DISTANCE = 18.0
+        const val RETREAT_MIN_EXTRA_ENEMY_DISTANCE = 2.5
+    }
+
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val suspend: Boolean
         get() = clientInstance.currentScreen !is ContainerScreen && !shouldExecute()
     override val maxDuration: Long = 100
     private var lastPearledTick = 0
+    private var speedMissingSinceTick = -1
     private val perception = CombatPerception(clientInstance)
 
 
     private enum class Type : MathUtil {
         RETREAT {
-            override fun test(fakePlayer: FakePlayer, targetState: CombatPerception.PlayerState) = false
+            override fun test(fakePlayer: FakePlayer, targetState: CombatPerception.PlayerState) =
+                targetState.lineOfSightLikelyClear
 
             /**
              * Checks whether the bot is “at a wall” by sampling a block a short distance
@@ -85,7 +97,8 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     }
 
     override fun shouldExecute(): Boolean {
-        if (!canSeeEnemy() || clientInstance.currentTick - lastPearledTick < 20 * clientInstance.configuration.pearlCooldown) return false
+        updateSpeedOutage()
+        if (!canSeeEnemy() || !isPearlCooldownReady()) return false
 
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
@@ -93,14 +106,7 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         if (!inventory.contains(Item.ENDER_PEARL)) return false
 
         val targetState = perception.nearestVisibleEnemy() ?: return false
-
-        for (t in Type.entries) {
-            if (t.test(fakePlayer, targetState)) {
-                return fakePlayer.health > clientInstance.configuration.pearlHealthThreshold
-            }
-        }
-
-        return false
+        return choosePearlType(fakePlayer, targetState) != null
     }
 
     override fun onStart() {
@@ -108,6 +114,50 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
 
     private fun canSeeEnemy(): Boolean {
         return perception.canSeeEnemy()
+    }
+
+    private fun isPearlCooldownReady(): Boolean {
+        return clientInstance.currentTick - lastPearledTick >= 20 * clientInstance.configuration.pearlCooldown
+    }
+
+    private fun updateSpeedOutage(): Int {
+        val fakePlayer = clientInstance.fakePlayer
+        if (fakePlayer.activePotionEffectIds.any { it == PotionEffectType.SPEED.id }) {
+            speedMissingSinceTick = -1
+            return 0
+        }
+
+        if (speedMissingSinceTick == -1) {
+            speedMissingSinceTick = clientInstance.currentTick
+        }
+        return clientInstance.currentTick - speedMissingSinceTick
+    }
+
+    private fun isHardAggro(targetState: CombatPerception.PlayerState): Boolean {
+        return targetState.lineOfSightLikelyClear &&
+            targetState.distance3D <= AGGRO_ESCAPE_MAX_DISTANCE &&
+            targetState.lookingAtSelf &&
+            (targetState.movingTowardSelf || targetState.distance3D <= 3.6) &&
+            (targetState.sprinting || targetState.horizontalSpeed >= 0.12 || targetState.activePotionEffectIds.contains(PotionEffectType.SPEED.id)) &&
+            (targetState.holdingWeapon || targetState.heldAttackDamage >= 4.0)
+    }
+
+    private fun shouldEmergencyRetreat(fakePlayer: FakePlayer, targetState: CombatPerception.PlayerState): Boolean {
+        return updateSpeedOutage() >= SPEED_MISSING_ESCAPE_TICKS &&
+            fakePlayer.health > AGGRO_ESCAPE_MIN_HEALTH &&
+            isHardAggro(targetState)
+    }
+
+    private fun choosePearlType(fakePlayer: FakePlayer, targetState: CombatPerception.PlayerState): Type? {
+        if (shouldEmergencyRetreat(fakePlayer, targetState)) {
+            return Type.RETREAT
+        }
+
+        return Type.entries.firstOrNull {
+            it != Type.RETREAT &&
+                it.test(fakePlayer, targetState) &&
+                fakePlayer.health > clientInstance.configuration.pearlHealthThreshold
+        }
     }
 
     private fun getPearlSlot(): Int {
@@ -140,10 +190,31 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         tick.finishIf("Enemy is not present", targetState == null)
         targetState ?: return
 
-        val type: Type = Type.entries.firstOrNull {
-            it.test(fakePlayer, targetState)
-        } ?: run {
+        val type = choosePearlType(fakePlayer, targetState) ?: run {
             tick.finishIf("No valid type found", true)
+            return
+        }
+
+        if (!isPearlCooldownReady()) {
+            tick.finishIf("Pearl cooldown active", true)
+            return
+        }
+
+        if (type == Type.RETREAT) {
+            val retreatYaw = perception.safeYawAwayFromNearestEnemy()
+            val terrain = perception.terrainAhead(retreatYaw, 1.0)
+            if (terrain.frontBlocked || terrain.lavaAhead || terrain.dropAhead) {
+                tick.finishIf("No safe retreat angle", true)
+                return
+            }
+        }
+
+        val typeStillValid = when (type) {
+            Type.RETREAT -> shouldEmergencyRetreat(fakePlayer, targetState)
+            else -> type.test(fakePlayer, targetState)
+        }
+        if (!typeStillValid) {
+            tick.finishIf("Pearl type no longer valid", true)
             return
         }
 
@@ -183,12 +254,10 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
             }
 
             Type.RETREAT -> CollisionFunction { x1: Double, y1: Double, z1: Double ->
-                hasHitBlock(
-                    world,
-                    x1,
-                    y1,
-                    z1
-                )
+                hasHitBlock(world, x1, y1, z1) &&
+                    fakePlayer.distance2DTo(x1, z1) in RETREAT_MIN_LANDING_DISTANCE..RETREAT_MAX_LANDING_DISTANCE &&
+                    sqrt((x1 - targetState.x) * (x1 - targetState.x) + (z1 - targetState.z) * (z1 - targetState.z)) >=
+                    targetState.distance2D + RETREAT_MIN_EXTRA_ENEMY_DISTANCE
             }
 
             Type.SIDE -> CollisionFunction { x1: Double, y1: Double, z1: Double ->
@@ -240,8 +309,10 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
             setMousePitch(it[1])
         }*/
 
-        // Aim pearl to land near enemy feet instead of face/chest level.
-        val angles = getAnglesToFeet(fakePlayer, targetState)
+        val angles = when (type) {
+            Type.RETREAT -> getRetreatAngles()
+            else -> getAnglesToFeet(fakePlayer, targetState)
+        }
         setMouseYaw(angles[0])
         setMousePitch(angles[1])
 
@@ -289,6 +360,10 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         val pitch = (basePitch + 12.0f).coerceIn(-89f, 89f)
 
         return floatArrayOf(yaw, pitch)
+    }
+
+    private fun getRetreatAngles(): FloatArray {
+        return floatArrayOf(perception.safeYawAwayFromNearestEnemy(), -4.0f)
     }
 
     private fun minimizePitch(

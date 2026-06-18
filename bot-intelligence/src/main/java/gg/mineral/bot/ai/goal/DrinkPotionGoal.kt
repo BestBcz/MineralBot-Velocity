@@ -16,16 +16,30 @@ import gg.mineral.bot.api.inv.potion.Potion
 import gg.mineral.bot.api.screen.type.ContainerScreen
 
 class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
+    private companion object {
+        const val REFRESH_WINDOW_TICKS = 30 * 20
+    }
+
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val maxDuration: Long = 100
     private var drinking = false
+    private var drinkWindowStartTick = -1
     private val perception = CombatPerception(clientInstance)
 
     override fun shouldExecute(): Boolean {
-        val enemy = perception.nearestVisibleEnemy()
-        val hasWindow = enemy != null && (enemy.distance3D >= 4.2 || !enemy.pressuringSelf)
-        val shouldExecute = hasWindow && hasDrinkablePotion()
+        val hasPotion = hasDrinkablePotion()
+        if (!hasPotion) {
+            drinkWindowStartTick = -1
+            logger.debug("Checking shouldExecute: false")
+            return false
+        }
+
+        if (drinkWindowStartTick == -1) {
+            drinkWindowStartTick = clientInstance.currentTick
+        }
+
+        val shouldExecute = canDrinkInWindow()
         logger.debug("Checking shouldExecute: $shouldExecute")
         return shouldExecute
     }
@@ -50,6 +64,16 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         return hasDrinkablePotion
     }
 
+    private fun canDrinkInWindow(): Boolean {
+        val enemy = perception.nearestVisibleEnemy() ?: return true
+        val waitedTicks = if (drinkWindowStartTick == -1) 0 else clientInstance.currentTick - drinkWindowStartTick
+
+        return enemy.distance3D >= 6.0 ||
+            (!enemy.pressuringSelf && enemy.distance3D >= 3.8) ||
+            (waitedTicks >= 60 && enemy.distance3D >= 3.4 && !enemy.movingTowardSelf) ||
+            (waitedTicks >= 120 && enemy.distance3D >= 3.0 && !enemy.lookingAtSelf)
+    }
+
     private fun canSeeEnemy(): Boolean {
         val canSeeEnemy = perception.canSeeEnemy()
         logger.debug("Checking canSeeEnemy: $canSeeEnemy")
@@ -67,8 +91,14 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     private fun isValidPotion(potion: Potion): Boolean {
         val fakePlayer = clientInstance.fakePlayer
         // TODO: exclude negative potions
-        for (effect in potion.effects) if (fakePlayer.isPotionActive(effect.potionID)) return false
-        return !potion.isSplash && potion.effects.isNotEmpty()
+        return !potion.isSplash &&
+            potion.effects.isNotEmpty() &&
+            potion.effects.any { effect ->
+                val remainingTicks = fakePlayer.clientActivePotionEffects
+                    .firstOrNull { it.potionID == effect.potionID }
+                    ?.duration
+                remainingTicks == null || remainingTicks <= REFRESH_WINDOW_TICKS
+            }
     }
 
     private fun isValidPotion(itemStack: ItemStack): Boolean {
@@ -115,7 +145,7 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
         tick.finishIf("Not Holding Valid Potion", inventory.heldItemStack?.let { isValidPotion(it) } == false)
 
-        tick.finishIf("Potion Not Needed", !shouldExecute())
+        tick.finishIf("Potion Not Needed", !drinking && !shouldExecute())
 
         tick.prerequisite("Drinking", drinking && getButton(MouseButton.Type.RIGHT_CLICK).isPressed) {
             pressButton(MouseButton.Type.RIGHT_CLICK)
@@ -138,11 +168,12 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
     override fun debugSummary(): String {
         val heldItem = clientInstance.fakePlayer.inventory.heldItemStack?.let { "${it.item.id}:${it.durability}x${it.count}" } ?: "empty"
-        return "drinking=$drinking,canSeeEnemy=${canSeeEnemy()},hasDrinkablePotion=${hasDrinkablePotion()},held=$heldItem"
+        return "drinking=$drinking,canSeeEnemy=${canSeeEnemy()},hasDrinkablePotion=${hasDrinkablePotion()},windowTicks=${clientInstance.currentTick - drinkWindowStartTick},held=$heldItem"
     }
 
     override fun onEnd() {
         drinking = false
+        drinkWindowStartTick = -1
         unpressButton(MouseButton.Type.RIGHT_CLICK)
         unpressKey(Key.Type.KEY_SPACE)
     }

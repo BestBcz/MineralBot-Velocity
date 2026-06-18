@@ -17,17 +17,22 @@ class EatFoodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance
     override var startTime: Long = 0
     override val maxDuration: Long = 100
     private var eating = false
+    private var foodWindowStartTick = -1
     private val perception = CombatPerception(clientInstance)
 
     override fun shouldExecute(): Boolean {
         val fakePlayer = clientInstance.fakePlayer
-        // TODO: config how conservative to be with food
-        val enemy = perception.nearestEnemy()
-        val hasSafeWindow = enemy == null ||
-            !enemy.lineOfSightLikelyClear ||
-            enemy.distance3D > 8.0 ||
-            (!enemy.pressuringSelf && enemy.distance3D > 5.0)
-        val shouldExecute = hasFood() && fakePlayer.hunger < 19 && fakePlayer.health > 16.0 && hasSafeWindow
+        if (!hasFood() || fakePlayer.hunger >= 20.0f) {
+            foodWindowStartTick = -1
+            logger.debug("Checking shouldExecute: false")
+            return false
+        }
+
+        if (foodWindowStartTick == -1) {
+            foodWindowStartTick = clientInstance.currentTick
+        }
+
+        val shouldExecute = canEatInWindow()
         logger.debug("Checking shouldExecute: $shouldExecute")
         return shouldExecute
     }
@@ -48,6 +53,18 @@ class EatFoodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance
         val hasFood = inventory.contains(Item.Type.FOOD)
         logger.debug("Has food: $hasFood")
         return hasFood
+    }
+
+    private fun canEatInWindow(): Boolean {
+        val enemy = perception.nearestEnemy() ?: return true
+        val waitedTicks = if (foodWindowStartTick == -1) 0 else clientInstance.currentTick - foodWindowStartTick
+
+        if (!enemy.lineOfSightLikelyClear) return true
+        if (enemy.distance3D >= 7.0) return true
+        if (!enemy.pressuringSelf && enemy.distance3D >= 4.0) return true
+        if (waitedTicks >= 60 && enemy.distance3D >= 3.4 && !enemy.movingTowardSelf) return true
+        if (waitedTicks >= 120 && enemy.distance3D >= 3.0 && !enemy.lookingAtSelf) return true
+        return waitedTicks >= 200 && enemy.distance3D >= 2.8 && clientInstance.fakePlayer.health >= 14.0f
     }
 
     private fun angleAwayFromEnemies(): Float {
@@ -82,7 +99,8 @@ class EatFoodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance
 
         tick.finishIf("Valid Food Found", foodSlot == -1)
 
-        tick.finishIf("Hunger Satisfied", fakePlayer.hunger >= 19)
+        tick.finishIf("Hunger Satisfied", fakePlayer.hunger >= 20)
+        tick.finishIf("Food Window Unsafe", !eating && !canEatInWindow())
 
         tick.prerequisite("In Hotbar", foodSlot <= 8) {
             moveItemToHotbar(foodSlot, inventory)
@@ -118,6 +136,9 @@ class EatFoodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance
 
     override fun onEnd() {
         eating = false
+        if (clientInstance.fakePlayer.hunger >= 20.0f) {
+            foodWindowStartTick = -1
+        }
         unpressButton(MouseButton.Type.RIGHT_CLICK)
         unpressKey(Key.Type.KEY_SPACE)
     }
