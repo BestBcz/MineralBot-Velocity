@@ -1,6 +1,7 @@
 package gg.mineral.bot.api.entity.living
 
 import gg.mineral.bot.api.entity.ClientEntity
+import gg.mineral.bot.api.entity.effect.PotionEffect
 
 interface ClientLivingEntity : ClientEntity {
     /**
@@ -16,6 +17,13 @@ interface ClientLivingEntity : ClientEntity {
      * @return the entity's active potion effect IDs
      */
     val activePotionEffectIds: IntArray
+
+    /**
+     * Gets the entity's active potion effects with their remaining durations.
+     *
+     * @return the entity's active potion effects
+     */
+    val clientActivePotionEffects: Collection<PotionEffect>
 
     /**
      * Checks if the entity has an active potion effect.
