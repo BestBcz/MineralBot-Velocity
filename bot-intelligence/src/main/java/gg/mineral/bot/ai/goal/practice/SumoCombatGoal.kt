@@ -29,6 +29,8 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     private var lastTargetSwitchTick = 0
     private var lastSprintResetTick = 0
     private var strafeDirection: Byte = 0
+    private var strafeLockedUntilTick = -1
+    private var forwardSuppressedUntilTick = -1
     private var comboCount = 0
     
     private val meanDelay = (1000 / clientInstance.configuration.averageCps).toLong()
@@ -42,8 +44,37 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     override fun shouldExecute(): Boolean = true
     
     override fun onStart() {
+        forwardSuppressedUntilTick = -1
+        strafeDirection = 0
+        strafeLockedUntilTick = -1
         pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
         comboCount = 0
+    }
+
+    private fun suppressForwardFor(ticks: Int) {
+        val untilTick = clientInstance.currentTick + ticks
+        if (untilTick > forwardSuppressedUntilTick) {
+            forwardSuppressedUntilTick = untilTick
+        }
+        unpressKey(Key.Type.KEY_W)
+    }
+
+    private fun isForwardSuppressed(): Boolean = clientInstance.currentTick <= forwardSuppressedUntilTick
+
+    private fun maintainForwardMovement() {
+        if (isForwardSuppressed()) {
+            unpressKey(Key.Type.KEY_W)
+            pressKey(Key.Type.KEY_LCONTROL)
+            return
+        }
+
+        pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+    }
+
+    private fun releaseStrafe() {
+        strafeDirection = 0
+        strafeLockedUntilTick = -1
+        unpressKey(Key.Type.KEY_A, Key.Type.KEY_D)
     }
     
     private fun findTarget() {
@@ -175,18 +206,19 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         
         // If near edge, prioritize moving away from edge
         if (isNearEdge) {
-            // Move towards the safe direction
-            unpressKey(Key.Type.KEY_A, Key.Type.KEY_D)
+            releaseStrafe()
+            setMouseYaw(edgeDirection)
+            maintainForwardMovement()
             return
         }
         
         if (!fakePlayer.isOnGround || distance > 3.5) {
-            unpressKey(Key.Type.KEY_D, Key.Type.KEY_A)
+            releaseStrafe()
             return
         }
         
         // Circle strafe for positioning advantage
-        strafeDirection = calculateStrafeDirection(target)
+        strafeDirection = lockedStrafeDirection(target)
         
         when (strafeDirection.toInt()) {
             1 -> {
@@ -212,6 +244,15 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         
         return if (crossProduct > 0) 2.toByte() else 1.toByte()
     }
+
+    private fun lockedStrafeDirection(target: ClientPlayer): Byte {
+        val proposedDirection = calculateStrafeDirection(target)
+        if (strafeDirection == 0.toByte() || clientInstance.currentTick >= strafeLockedUntilTick) {
+            strafeDirection = proposedDirection
+            strafeLockedUntilTick = clientInstance.currentTick + 5 + clientInstance.fakePlayer.random.nextInt(4)
+        }
+        return strafeDirection
+    }
     
     /**
      * W-tap for sprint reset - critical for Sumo knockback combos.
@@ -227,10 +268,7 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         val config = clientInstance.configuration
         
         if (config.sprintResetAccuracy >= 1 || fakePlayer.random.nextFloat() < config.sprintResetAccuracy) {
-            // Quick W release for sprint reset
-            unpressKey(100, Key.Type.KEY_W)
-            // Continue sprinting after
-            schedule({ pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL) }, 150)
+            suppressForwardFor(2)
         }
     }
     
@@ -241,7 +279,7 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     }
     
     override fun onTick(tick: Tick) {
-        pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+        maintainForwardMovement()
         
         tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)

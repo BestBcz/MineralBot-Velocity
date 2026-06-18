@@ -351,6 +351,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     private var recentHitsOnTarget = 0
     private var recentHitsTaken = 0
     private var hitWindowStartTick = 0
+    private var forwardSuppressedUntilTick = -1
+    private var lastPressureResetTick = -200
 
     private fun attackTarget() {
         val fakePlayer = clientInstance.fakePlayer
@@ -369,6 +371,42 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     private var resetType = ResetType.OFFENSIVE
     private var lastResetType = ResetType.OFFENSIVE
     private var strafeDirection: Byte = 0
+    private var strafeLockedUntilTick = -1
+
+    private fun suppressForwardFor(ticks: Int) {
+        val untilTick = clientInstance.currentTick + ticks
+        if (untilTick > forwardSuppressedUntilTick) {
+            forwardSuppressedUntilTick = untilTick
+        }
+        unpressKey(Key.Type.KEY_W)
+    }
+
+    private fun isForwardSuppressed(): Boolean = clientInstance.currentTick <= forwardSuppressedUntilTick
+
+    private fun maintainForwardMovement() {
+        if (isForwardSuppressed()) {
+            unpressKey(Key.Type.KEY_W)
+            pressKey(Key.Type.KEY_LCONTROL)
+            return
+        }
+
+        pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+    }
+
+    private fun releaseStrafe() {
+        strafeDirection = 0
+        strafeLockedUntilTick = -1
+        unpressKey(Key.Type.KEY_D, Key.Type.KEY_A)
+    }
+
+    private fun lockedStrafeDirection(target: ClientEntity): Byte {
+        val proposedDirection = strafeDirection(target)
+        if (strafeDirection == 0.toByte() || clientInstance.currentTick >= strafeLockedUntilTick) {
+            strafeDirection = proposedDirection
+            strafeLockedUntilTick = clientInstance.currentTick + 5 + clientInstance.fakePlayer.random.nextInt(4)
+        }
+        return strafeDirection
+    }
 
     private fun strafe() {
         val target = this.target ?: return
@@ -382,11 +420,11 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
                                                          * ()
                                                          * < 1000
                                                          */) {
-            unpressKey(Key.Type.KEY_D, Key.Type.KEY_A)
+            releaseStrafe()
             return
         }
 
-        strafeDirection = strafeDirection(target)
+        strafeDirection = lockedStrafeDirection(target)
 
         when (strafeDirection.toInt()) {
             1 -> {
@@ -452,20 +490,20 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
                     || fakePlayer.random.nextFloat() < config
                         .sprintResetAccuracy
                 ) {
-                    pressKey(150, Key.Type.KEY_S)
-                    unpressKey(150, Key.Type.KEY_W)
+                    pressKey(120, Key.Type.KEY_S)
+                    suppressForwardFor(3)
                 }
             }
 
             ResetType.OFFENSIVE -> if (config.sprintResetAccuracy >= 1
                 || fakePlayer.random.nextFloat() < config
                     .sprintResetAccuracy
-            ) unpressKey(150, Key.Type.KEY_W)
+            ) suppressForwardFor(3)
 
             ResetType.DEFENSIVE -> if (config.sprintResetAccuracy >= 1
                 || fakePlayer.random.nextFloat() < config
                     .sprintResetAccuracy
-            ) unpressKey(100, Key.Type.KEY_W)
+            ) suppressForwardFor(2)
 
             ResetType.EXTRA_DEFENSIVE -> if (config.sprintResetAccuracy >= 1
                 || fakePlayer.random.nextFloat() < config
@@ -532,7 +570,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val yieldingMovement = shouldYieldMovementToUtility()
 
         if (!yieldingMovement) {
-            pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+            maintainForwardMovement()
         }
 
         val meleeWeaponSlot = getBestMeleeWeaponSlot()
@@ -611,14 +649,16 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     private fun applyHumanizedMovement() {
         val target = this.target
         val fakePlayer = clientInstance.fakePlayer
+        expireHitWindow()
 
         if (target == null) {
-            unpressKey(Key.Type.KEY_A, Key.Type.KEY_D, Key.Type.KEY_S)
+            releaseStrafe()
+            unpressKey(Key.Type.KEY_S)
             val ticksSinceSeen = clientInstance.currentTick - lastSeenTargetTick
 
-            if (ticksSinceSeen <= 8) {
+            if (ticksSinceSeen <= 16) {
                 setMouseYaw(lastKnownTargetYaw())
-                pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+                maintainForwardMovement()
             } else {
                 unpressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
                 if (clientInstance.currentTick - lastSearchTurnTick >= 5) {
@@ -633,10 +673,13 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val distance = fakePlayer.distance3DTo(target)
         val winningTrade = recentHitsOnTarget >= recentHitsTaken + 1
 
-        // Only keep W-tap style rhythm reset based on trade outcome.
-        if (winningTrade && distance in 2.0..3.4) {
-            unpressKey(90, Key.Type.KEY_W)
-            return
+        if (winningTrade &&
+            fakePlayer.isOnGround &&
+            distance in 2.0..3.4 &&
+            clientInstance.currentTick - lastPressureResetTick >= 7
+        ) {
+            suppressForwardFor(1)
+            lastPressureResetTick = clientInstance.currentTick
         }
 
         applyTerrainAwareMovement()
@@ -663,7 +706,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
         if (lavaAhead) {
             // Soft sidestep to avoid walking directly into lava.
-            unpressKey(100, Key.Type.KEY_W)
+            suppressForwardFor(2)
             pressKey(100, Key.Type.KEY_A)
             setMouseYaw(fakePlayer.yaw + 22f)
             return
@@ -704,7 +747,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
         // Don't drop into holes blindly.
         if (groundAhead == Block.AIR && fakePlayer.isOnGround) {
-            unpressKey(120, Key.Type.KEY_W)
+            suppressForwardFor(3)
             pressKey(120, Key.Type.KEY_A)
             return
         }
@@ -719,6 +762,16 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
     private fun refreshHitWindow() {
         if (clientInstance.currentTick - hitWindowStartTick > 18) {
+            hitWindowStartTick = clientInstance.currentTick
+            recentHitsOnTarget = 0
+            recentHitsTaken = 0
+        }
+    }
+
+    private fun expireHitWindow() {
+        if ((recentHitsOnTarget != 0 || recentHitsTaken != 0) &&
+            clientInstance.currentTick - hitWindowStartTick > 18
+        ) {
             hitWindowStartTick = clientInstance.currentTick
             recentHitsOnTarget = 0
             recentHitsTaken = 0
