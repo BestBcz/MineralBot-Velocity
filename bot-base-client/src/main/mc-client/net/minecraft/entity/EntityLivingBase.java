@@ -223,6 +223,11 @@ public abstract class EntityLivingBase extends Entity implements ClientLivingEnt
         return this.activePotionsMap.keySet().toIntArray();
     }
 
+    @Override
+    public Collection<gg.mineral.bot.api.entity.effect.PotionEffect> getClientActivePotionEffects() {
+        return Collections.unmodifiableCollection(new ArrayList<gg.mineral.bot.api.entity.effect.PotionEffect>(this.activePotionsMap.values()));
+    }
+
     public EntityLivingBase(World p_i1594_1_) {
         super(p_i1594_1_);
         this.applyEntityAttributes();
