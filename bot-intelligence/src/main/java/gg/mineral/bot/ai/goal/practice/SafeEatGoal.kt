@@ -5,7 +5,6 @@ import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
 import gg.mineral.bot.api.event.Event
-import gg.mineral.bot.api.event.entity.EntityHurtEvent
 import gg.mineral.bot.api.event.peripherals.MouseButtonEvent
 import gg.mineral.bot.api.goal.GoalDebugState
 import gg.mineral.bot.api.goal.Sporadic
@@ -22,7 +21,7 @@ import gg.mineral.bot.api.inv.item.Item
  * Solution:
  * - Only eat when far enough from enemies OR
  * - If forced to eat close to enemy, jump + sprint away
- * - Cancel eating to block/attack if combo detected
+ * - Once eating starts, hold the action long enough to finish
  */
 class SafeEatGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
@@ -32,32 +31,28 @@ class SafeEatGoal(clientInstance: ClientInstance) :
 
     private var eating = false
     private var eatingStartTick = 0
-    private var comboDetected = false
-    private var hitsTaken = 0
     private var lastEatTick = 0
     private val perception = CombatPerception(clientInstance)
 
     override fun shouldExecute(): Boolean {
-        if (clientInstance.currentTick - lastEatTick < 30) return false
+        if (clientInstance.currentTick - lastEatTick < 25) return false
 
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
 
         // Need food and hunger isn't full
         if (!inventory.contains(Item.Type.FOOD)) return false
-        if (fakePlayer.hunger >= 19) return false
+        if (fakePlayer.hunger >= 20) return false
 
         // Only eat if safe or really need it
         val distance = distanceAwayFromEnemies()
-        val healthCritical = fakePlayer.health < 8
+        val healthCritical = fakePlayer.health <= 8
 
-        return (distance > 8.0 && fakePlayer.health > 10) || healthCritical
+        return (distance >= 7.0 && fakePlayer.health >= 9) || healthCritical
     }
 
     override fun onStart() {
         eating = false
-        comboDetected = false
-        hitsTaken = 0
         pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
     }
 
@@ -97,17 +92,7 @@ class SafeEatGoal(clientInstance: ClientInstance) :
         val inventory = fakePlayer.inventory
 
         tick.finishIf("No Food", foodSlot == -1)
-        tick.finishIf("Hunger Full", fakePlayer.hunger >= 19)
-
-        // Cancel if combo detected and we've been hit too much
-        if (comboDetected && hitsTaken >= 2) {
-            tick.execute {
-                unpressButton(MouseButton.Type.RIGHT_CLICK)
-                eating = false
-                finish() // Stop eating, need to fight back
-            }
-            return
-        }
+        tick.finishIf("Hunger Full", fakePlayer.hunger >= 20)
 
         tick.prerequisite("In Hotbar", foodSlot <= 8) { moveItemToHotbar(foodSlot, inventory) }
 
@@ -156,13 +141,11 @@ class SafeEatGoal(clientInstance: ClientInstance) :
     override fun debugSummary(): String {
         val heldItem = clientInstance.fakePlayer.inventory.heldItemStack?.let { "${it.item.id}:${it.durability}x${it.count}" } ?: "empty"
         val eatingTicks = if (eating) clientInstance.currentTick - eatingStartTick else 0
-        return "eating=$eating,eatingTicks=$eatingTicks,hitsTaken=$hitsTaken,comboDetected=$comboDetected,lastEatAgo=${clientInstance.currentTick - lastEatTick},distance=${distanceAwayFromEnemies()},held=$heldItem"
+        return "eating=$eating,eatingTicks=$eatingTicks,lastEatAgo=${clientInstance.currentTick - lastEatTick},distance=${distanceAwayFromEnemies()},held=$heldItem"
     }
 
     override fun onEnd() {
         eating = false
-        comboDetected = false
-        hitsTaken = 0
         lastEatTick = clientInstance.currentTick
         if (clientInstance.currentScreen != null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
@@ -175,16 +158,6 @@ class SafeEatGoal(clientInstance: ClientInstance) :
         if (event is MouseButtonEvent) {
             if (eating && event.type == MouseButton.Type.RIGHT_CLICK && !event.pressed) {
                 return true // Prevent releasing right click while eating
-            }
-        }
-
-        if (event is EntityHurtEvent && eating) {
-            val fakePlayer = clientInstance.fakePlayer
-            if (event.attackedEntity.uuid == fakePlayer.uuid) {
-                hitsTaken++
-                if (hitsTaken >= 2) {
-                    comboDetected = true
-                }
             }
         }
 

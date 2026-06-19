@@ -60,11 +60,11 @@ class EatFoodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance
         val waitedTicks = if (foodWindowStartTick == -1) 0 else clientInstance.currentTick - foodWindowStartTick
 
         if (!enemy.lineOfSightLikelyClear) return true
-        if (enemy.distance3D >= 7.0) return true
-        if (!enemy.pressuringSelf && enemy.distance3D >= 4.0) return true
-        if (waitedTicks >= 60 && enemy.distance3D >= 3.4 && !enemy.movingTowardSelf) return true
-        if (waitedTicks >= 120 && enemy.distance3D >= 3.0 && !enemy.lookingAtSelf) return true
-        return waitedTicks >= 200 && enemy.distance3D >= 2.8 && clientInstance.fakePlayer.health >= 14.0f
+        if (enemy.distance3D >= 6.5) return true
+        if (!enemy.pressuringSelf && enemy.distance3D >= 3.7) return true
+        if (waitedTicks >= 50 && enemy.distance3D >= 3.2 && !enemy.movingTowardSelf) return true
+        if (waitedTicks >= 100 && enemy.distance3D >= 2.8 && !enemy.lookingAtSelf) return true
+        return waitedTicks >= 160 && enemy.distance3D >= 2.6 && clientInstance.fakePlayer.health >= 12.0f
     }
 
     private fun angleAwayFromEnemies(): Float {
