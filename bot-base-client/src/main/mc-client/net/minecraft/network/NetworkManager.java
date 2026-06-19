@@ -81,6 +81,7 @@ public class NetworkManager extends SimpleChannelInboundHandler<Packet> {
      */
     protected IChatComponent terminationReason;
     protected boolean encryptionEnabled;
+    private boolean disconnected;
     /**
      * The active channel
      */
@@ -184,7 +185,11 @@ public class NetworkManager extends SimpleChannelInboundHandler<Packet> {
                     "Internal Exception: " + p_exceptionCaught_2_);
         }
 
-        p_exceptionCaught_2_.printStackTrace();
+        if (p_exceptionCaught_2_ instanceof TimeoutException) {
+            logger.warn("Network read timed out: {}", p_exceptionCaught_2_.toString());
+        } else {
+            logger.error("Network exception caught", p_exceptionCaught_2_);
+        }
 
         this.closeChannel(var3);
     }
@@ -278,6 +283,15 @@ public class NetworkManager extends SimpleChannelInboundHandler<Packet> {
      * Checks timeouts and processes all packets received
      */
     public void processReceivedPackets() {
+        if (this.channel == null) {
+            return;
+        }
+
+        if (!this.channel.isOpen()) {
+            this.checkDisconnected();
+            return;
+        }
+
         this.flushOutboundQueue();
         EnumConnectionState var1 = this.channel.attr(attrKeyConnectionState).get();
 
@@ -301,14 +315,34 @@ public class NetworkManager extends SimpleChannelInboundHandler<Packet> {
         this.channel.flush();
     }
 
+    public void checkDisconnected() {
+        if (this.channel != null && !this.channel.isOpen()) {
+            if (this.disconnected) {
+                return;
+            }
+
+            this.disconnected = true;
+
+            if (this.netHandler != null) {
+                IChatComponent reason = this.terminationReason != null
+                        ? this.terminationReason
+                        : new ChatComponentText("Disconnected from server");
+                this.netHandler.onDisconnect(reason);
+            }
+        }
+    }
+
     /**
      * Closes the channel, the parameter can be used for an exit message (not
      * certain how it gets sent)
      */
     public void closeChannel(IChatComponent p_150718_1_) {
-        if (this.channel.isOpen()) {
-            this.channel.close();
+        if (this.terminationReason == null) {
             this.terminationReason = p_150718_1_;
+        }
+
+        if (this.channel != null && this.channel.isOpen()) {
+            this.channel.close();
         }
     }
 

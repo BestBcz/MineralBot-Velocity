@@ -28,6 +28,7 @@ dependencies {
     implementation(project(":bot-shared-library"))
     implementation(project(":bot-base-client"))
     implementation(project(":bot-intelligence"))
+    compileOnly("io.netty:netty-all:4.2.9.Final")
     
     // Kotlin
     implementation(kotlin("stdlib-jdk8"))

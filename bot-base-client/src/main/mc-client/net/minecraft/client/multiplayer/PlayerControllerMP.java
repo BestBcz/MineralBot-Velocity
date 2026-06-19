@@ -25,7 +25,6 @@ import net.minecraft.network.play.client.C0EPacketClickWindow;
 import net.minecraft.network.play.client.C10PacketCreativeInventoryAction;
 import net.minecraft.network.play.client.C11PacketEnchantItem;
 import net.minecraft.stats.StatFileWriter;
-import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
@@ -331,12 +330,8 @@ public class PlayerControllerMP {
 
         if (this.netClientHandler.getNetworkManager().isChannelOpen())
             this.netClientHandler.getNetworkManager().processReceivedPackets();
-        else if (this.netClientHandler.getNetworkManager().getExitMessage() != null)
-            this.netClientHandler.getNetworkManager().getNetHandler()
-                    .onDisconnect(this.netClientHandler.getNetworkManager().getExitMessage());
         else
-            this.netClientHandler.getNetworkManager().getNetHandler()
-                    .onDisconnect(new ChatComponentText("Disconnected from server"));
+            this.netClientHandler.getNetworkManager().checkDisconnected();
     }
 
     private boolean sameToolAndBlock(int p_85182_1_, int p_85182_2_, int p_85182_3_) {

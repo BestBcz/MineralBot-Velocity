@@ -208,9 +208,7 @@ open class GuiConnecting : GuiScreen {
         if (this.networkManager == null) return
 
         if (networkManager!!.isChannelOpen) networkManager!!.processReceivedPackets()
-        else if (networkManager!!.exitMessage != null) networkManager!!.netHandler.onDisconnect(
-            networkManager!!.exitMessage
-        )
+        else networkManager!!.checkDisconnected()
     }
 
     override fun keyTyped(character: Char, p_73869_2_: Int) {
