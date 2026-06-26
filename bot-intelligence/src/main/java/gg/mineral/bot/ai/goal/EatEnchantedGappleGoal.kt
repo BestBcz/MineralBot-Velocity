@@ -20,12 +20,14 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
         const val REGEN_REFRESH_WINDOW_TICKS = 10 * 20
         const val FORCE_REGEN_REFRESH_TICKS = 3 * 20
         const val RECENT_EAT_GRACE_TICKS = 4 * 20
+        const val EAT_TICKS = 32
     }
 
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val maxDuration: Long = 100
     private var eating = false
+    private var eatingStartTick: Int = -1
     private var lastEatTick: Int = -RECENT_EAT_GRACE_TICKS
     private val perception = CombatPerception(clientInstance)
 
@@ -36,6 +38,8 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
     }
 
     override fun onStart() {
+        eating = false
+        eatingStartTick = -1
         pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
         unpressKey(Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
     }
@@ -100,6 +104,7 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
         val gappleSlot = getEnchantedGappleSlot()
         val inventory = clientInstance.fakePlayer.inventory
 
+        tick.finishIf("32-tick enchanted golden apple use complete", eating && eatingStartTick != -1 && clientInstance.currentTick - eatingStartTick >= EAT_TICKS)
         tick.finishIf("No enchanted golden apple found", gappleSlot == -1)
 
         tick.prerequisite("In Hotbar", gappleSlot <= 8) {
@@ -119,6 +124,9 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
         tick.finishIf("Regeneration refresh not needed", !eating && !shouldRefreshRegen())
 
         tick.prerequisite("Eating", eating && getButton(MouseButton.Type.RIGHT_CLICK).isPressed) {
+            if (!eating) {
+                eatingStartTick = clientInstance.currentTick
+            }
             pressButton(MouseButton.Type.RIGHT_CLICK)
             eating = true
         }
@@ -140,7 +148,8 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
     override fun debugSummary(): String {
         val heldItem = clientInstance.fakePlayer.inventory.heldItemStack?.let { "${it.item.id}:${it.durability}x${it.count}" } ?: "empty"
         val enemy = perception.nearestEnemy()
-        return "eating=$eating,lastEatAgo=${clientInstance.currentTick - lastEatTick},regenRemaining=${regenerationRemainingTicks() ?: -1},safeWindow=${canEatInSafetyWindow()},enemyEating=${enemy?.eatingOrDrinking ?: false},distance=${distanceAwayFromEnemies()},held=$heldItem"
+        val eatingTicks = if (eating && eatingStartTick != -1) clientInstance.currentTick - eatingStartTick else 0
+        return "eating=$eating,eatingTicks=$eatingTicks,lastEatAgo=${clientInstance.currentTick - lastEatTick},regenRemaining=${regenerationRemainingTicks() ?: -1},safeWindow=${canEatInSafetyWindow()},enemyEating=${enemy?.eatingOrDrinking ?: false},distance=${distanceAwayFromEnemies()},held=$heldItem"
     }
 
     override fun onEnd() {
@@ -149,6 +158,7 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
         }
 
         eating = false
+        eatingStartTick = -1
         unpressButton(MouseButton.Type.RIGHT_CLICK)
         unpressKey(Key.Type.KEY_SPACE)
     }

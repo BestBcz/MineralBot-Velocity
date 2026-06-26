@@ -11,6 +11,7 @@ import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.item.Item
+import gg.mineral.bot.api.inv.item.ItemStack
 
 /**
  * Anti-combo food defense goal.
@@ -38,10 +39,9 @@ class SafeEatGoal(clientInstance: ClientInstance) :
         if (clientInstance.currentTick - lastEatTick < 25) return false
 
         val fakePlayer = clientInstance.fakePlayer
-        val inventory = fakePlayer.inventory
 
-        // Need food and hunger isn't full
-        if (!inventory.contains(Item.Type.FOOD)) return false
+        // Need non-enchanted food and hunger isn't full
+        if (getFoodSlot() == -1) return false
         if (fakePlayer.hunger >= 20) return false
 
         // Only eat if safe or really need it
@@ -79,11 +79,15 @@ class SafeEatGoal(clientInstance: ClientInstance) :
         for (i in 0..35) {
             val itemStack = inventory.getItemStackAt(i) ?: continue
             val item = itemStack.item
-            if (Item.Type.FOOD.isType(item.id)) {
+            if (Item.Type.FOOD.isType(item.id) && !isEnchantedGapple(itemStack)) {
                 return i
             }
         }
         return -1
+    }
+
+    private fun isEnchantedGapple(itemStack: ItemStack): Boolean {
+        return itemStack.item.id == Item.GOLDEN_APPLE && itemStack.durability == 1
     }
 
     override fun onTick(tick: Tick) {
