@@ -16,6 +16,8 @@ import net.minecraft.client.renderer.texture.ITextureObject;
 import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.resources.SkinManager;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.item.EnumAction;
+import net.minecraft.item.ItemStack;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.StringUtils;
 import net.minecraft.world.World;
@@ -95,6 +97,24 @@ public abstract class AbstractClientPlayer extends EntityPlayer implements SkinM
     @Override
     public float getHunger() {
         return this.foodStats.getFoodLevel();
+    }
+
+    @Override
+    public boolean isEatingOrDrinking() {
+        if (!this.isUsingItem() && !this.isEating()) {
+            return false;
+        }
+
+        ItemStack itemStack = this.getItemInUse();
+        if (itemStack == null && this.isEating()) {
+            itemStack = this.inventory.getCurrentItem();
+        }
+        if (itemStack == null) {
+            return false;
+        }
+
+        EnumAction action = itemStack.getItemUseAction();
+        return action == EnumAction.eat || action == EnumAction.drink;
     }
 
     @Override

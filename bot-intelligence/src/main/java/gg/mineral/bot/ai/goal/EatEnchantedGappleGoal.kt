@@ -4,6 +4,7 @@ import gg.mineral.bot.ai.goal.type.InventoryGoal
 import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
+import gg.mineral.bot.api.entity.effect.PotionEffectType
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.event.peripherals.MouseButtonEvent
 import gg.mineral.bot.api.goal.GoalDebugState
@@ -15,18 +16,21 @@ import gg.mineral.bot.api.inv.item.ItemStack
 import gg.mineral.bot.api.screen.type.ContainerScreen
 
 class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
+    private companion object {
+        const val REGEN_REFRESH_WINDOW_TICKS = 10 * 20
+        const val FORCE_REGEN_REFRESH_TICKS = 3 * 20
+        const val RECENT_EAT_GRACE_TICKS = 4 * 20
+    }
+
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val maxDuration: Long = 100
     private var eating = false
-    private var lastEatTick: Int = -600
+    private var lastEatTick: Int = -RECENT_EAT_GRACE_TICKS
     private val perception = CombatPerception(clientInstance)
 
     override fun shouldExecute(): Boolean {
-        val fakePlayer = clientInstance.fakePlayer
-        val enemy = perception.nearestVisibleEnemy()
-        val hasWindow = enemy != null && (enemy.distance3D >= 3.6 || fakePlayer.health <= 10.0f || !enemy.pressuringSelf)
-        val shouldExecute = hasWindow && hasEnchantedGapple() && canEatNow()
+        val shouldExecute = hasEnchantedGapple() && shouldRefreshRegen()
         logger.debug("Checking shouldExecute: $shouldExecute")
         return shouldExecute
     }
@@ -36,8 +40,29 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
         unpressKey(Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
     }
 
-    private fun canEatNow(): Boolean {
-        return clientInstance.currentTick - lastEatTick >= 600
+    private fun regenerationRemainingTicks(): Int? {
+        return clientInstance.fakePlayer.clientActivePotionEffects
+            .firstOrNull { it.potionID == PotionEffectType.REGENERATION.id }
+            ?.duration
+    }
+
+    private fun recentlyAte(): Boolean {
+        return clientInstance.currentTick - lastEatTick < RECENT_EAT_GRACE_TICKS
+    }
+
+    private fun shouldRefreshRegen(): Boolean {
+        if (eating) return true
+        if (recentlyAte()) return false
+
+        val remainingTicks = regenerationRemainingTicks() ?: return true
+        if (remainingTicks > REGEN_REFRESH_WINDOW_TICKS) return false
+        if (remainingTicks <= FORCE_REGEN_REFRESH_TICKS) return true
+        return canEatInSafetyWindow()
+    }
+
+    private fun canEatInSafetyWindow(): Boolean {
+        val enemy = perception.nearestEnemy() ?: return true
+        return enemy.distance3D > 10.0 || enemy.eatingOrDrinking
     }
 
     private fun hasEnchantedGapple(): Boolean {
@@ -91,7 +116,7 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
 
         tick.finishIf("Not holding enchanted golden apple", inventory.heldItemStack?.let { isEnchantedGapple(it) } == false)
 
-        tick.finishIf("30-second cooldown not ready", !canEatNow())
+        tick.finishIf("Regeneration refresh not needed", !eating && !shouldRefreshRegen())
 
         tick.prerequisite("Eating", eating && getButton(MouseButton.Type.RIGHT_CLICK).isPressed) {
             pressButton(MouseButton.Type.RIGHT_CLICK)
@@ -114,7 +139,8 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
 
     override fun debugSummary(): String {
         val heldItem = clientInstance.fakePlayer.inventory.heldItemStack?.let { "${it.item.id}:${it.durability}x${it.count}" } ?: "empty"
-        return "eating=$eating,lastEatAgo=${clientInstance.currentTick - lastEatTick},canEatNow=${canEatNow()},distance=${distanceAwayFromEnemies()},held=$heldItem"
+        val enemy = perception.nearestEnemy()
+        return "eating=$eating,lastEatAgo=${clientInstance.currentTick - lastEatTick},regenRemaining=${regenerationRemainingTicks() ?: -1},safeWindow=${canEatInSafetyWindow()},enemyEating=${enemy?.eatingOrDrinking ?: false},distance=${distanceAwayFromEnemies()},held=$heldItem"
     }
 
     override fun onEnd() {

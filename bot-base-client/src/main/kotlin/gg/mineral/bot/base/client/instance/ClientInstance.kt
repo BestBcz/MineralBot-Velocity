@@ -481,6 +481,7 @@ open class ClientInstance(
                 override val eyeHeight: Float = 0f
                 override val username = configuration.fullUsername
                 override val hunger = 20f
+                override val isEatingOrDrinking = false
                 override val headY = 0.0
                 override val activePotionEffectIds = intArrayOf()
                 override val clientActivePotionEffects = emptyList<gg.mineral.bot.api.entity.effect.PotionEffect>()

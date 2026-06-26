@@ -43,6 +43,13 @@ interface ClientPlayer : ClientLivingEntity {
     val hunger: Float
 
     /**
+     * Gets whether the player is currently eating food or drinking a potion.
+     *
+     * @return true if the player is eating or drinking
+     */
+    val isEatingOrDrinking: Boolean
+
+    /**
      * Gets the player's motion simulator.
      *
      * @return the player's motion simulator
