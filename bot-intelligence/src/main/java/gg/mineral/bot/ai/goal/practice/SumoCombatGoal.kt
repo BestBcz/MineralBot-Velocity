@@ -126,7 +126,7 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     }
     
     /**
-     * Check if the bot is near an edge (void/water below).
+     * Check whether the next movement lane would step into void, liquid, or a large drop.
      */
     private fun checkEdge(): Boolean {
         val edge = perception.edgeProbe()
@@ -143,7 +143,7 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         val fakePlayer = clientInstance.fakePlayer
         val distance = perception.snapshot().stateFor(target)?.distance3D ?: fakePlayer.distance3DTo(target)
 
-        // If near edge, prioritize moving away from edge
+        // Only take over movement when the next lane is actually unsafe.
         if (isNearEdge) {
             releaseStrafe()
             setMouseYaw(edgeDirection)

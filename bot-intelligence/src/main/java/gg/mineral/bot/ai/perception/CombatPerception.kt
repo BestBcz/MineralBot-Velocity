@@ -7,7 +7,9 @@ import gg.mineral.bot.api.entity.throwable.ClientPotion
 import gg.mineral.bot.api.entity.throwable.ClientThrowableEntity
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.item.Item
+import gg.mineral.bot.api.math.BoundingBox
 import gg.mineral.bot.api.util.MathUtil
+import gg.mineral.bot.api.world.ClientWorld
 import gg.mineral.bot.api.world.block.Block
 import java.util.UUID
 
@@ -115,9 +117,32 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
     fun terrainAt(x: Double, z: Double): TerrainProbe {
         val fakePlayer = clientInstance.fakePlayer
         val world = fakePlayer.world
+        val baseY = fakePlayer.boundingBox.minY
+        val playerWidth = max(fakePlayer.boundingBox.maxX - fakePlayer.boundingBox.minX, 0.6)
+        val playerHeight = max(fakePlayer.boundingBox.maxY - fakePlayer.boundingBox.minY, 1.8)
+        val halfWidth = playerWidth * 0.5
         val feetBlock = world.getBlockAt(x, fakePlayer.y, z).id
         val headBlock = world.getBlockAt(x, fakePlayer.y + 1.0, z).id
         val groundBlock = world.getBlockAt(x, fakePlayer.y - 1.0, z).id
+        val walkableTopY = findWalkableTopY(world, x, z, baseY, halfWidth)
+        val stepDelta = walkableTopY?.let { it - baseY } ?: Double.NEGATIVE_INFINITY
+        val headClear = walkableTopY?.let { isPlayerSpaceClear(world, x, it, z, halfWidth, playerHeight) } ?: false
+        val bodyBlockedAtCurrentY = hasCollision(
+            world,
+            playerBoxAt(x, baseY, z, halfWidth, playerHeight)
+        )
+        val lavaAhead = isLava(feetBlock) || isLava(headBlock)
+        val liquidAhead = isLiquid(feetBlock) || isLiquid(headBlock)
+        val dangerousDrop = walkableTopY == null || stepDelta < -MAX_SAFE_DROP_HEIGHT || liquidAhead
+        val tooTallToClimb = walkableTopY == null || stepDelta > MAX_JUMP_HEIGHT
+        val frontBlocked = !lavaAhead && !liquidAhead && (
+            (walkableTopY != null && !headClear) ||
+                (bodyBlockedAtCurrentY && tooTallToClimb)
+            )
+        val requiresJump = !frontBlocked &&
+            !dangerousDrop &&
+            stepDelta > MAX_STEP_HEIGHT + EPSILON &&
+            stepDelta <= MAX_JUMP_HEIGHT
 
         return TerrainProbe(
             x = x,
@@ -125,41 +150,32 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
             feetBlockId = feetBlock,
             headBlockId = headBlock,
             groundBlockId = groundBlock,
-            lavaAhead = isLava(feetBlock) || isLava(headBlock),
-            liquidAhead = isLiquid(feetBlock) || isLiquid(headBlock),
-            frontBlocked = isBlocking(feetBlock) && isBlocking(headBlock),
-            dropAhead = groundBlock == Block.AIR,
-            lowProfileStep = feetBlock == Block.CARPET || feetBlock == Block.SNOW_LAYER
+            lavaAhead = lavaAhead,
+            liquidAhead = liquidAhead,
+            frontBlocked = frontBlocked,
+            dropAhead = dangerousDrop,
+            lowProfileStep = walkableTopY != null && stepDelta > EPSILON && stepDelta <= MAX_STEP_HEIGHT,
+            walkableTopY = walkableTopY,
+            stepDelta = stepDelta,
+            headClear = headClear,
+            passable = !lavaAhead && !liquidAhead && !frontBlocked && !dangerousDrop,
+            requiresJump = requiresJump,
+            dangerousDrop = dangerousDrop
         )
     }
 
-    fun edgeProbe(baseYaw: Float = clientInstance.fakePlayer.yaw, checkDistance: Double = 1.5, depth: Int = 5): EdgeProbe {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
+    fun edgeProbe(baseYaw: Float = clientInstance.fakePlayer.yaw, checkDistance: Double = 0.85, depth: Int = 5): EdgeProbe {
         val directions = arrayOf(
             baseYaw,
             baseYaw + 90f,
-            baseYaw - 90f,
-            baseYaw + 180f
+            baseYaw - 90f
         )
 
         var nearestDirectionIndex = -1
         var nearestDirectionYaw = baseYaw
 
         for ((index, yaw) in directions.withIndex()) {
-            val dir = vectorForRotation(0f, yaw)
-            val x = fakePlayer.x + dir[0] * checkDistance
-            val z = fakePlayer.z + dir[2] * checkDistance
-
-            var hasGround = false
-            for (yOffset in 0..depth) {
-                if (world.getBlockAt(x, fakePlayer.y - yOffset, z).id != Block.AIR) {
-                    hasGround = true
-                    break
-                }
-            }
-
-            if (!hasGround) {
+            if (isDangerousEdgeAtYaw(yaw, checkDistance, depth)) {
                 nearestDirectionIndex = index
                 nearestDirectionYaw = yaw
                 break
@@ -177,6 +193,137 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
             else -> baseYaw
         }
         return EdgeProbe(true, safeYaw, nearestDirectionIndex, nearestDirectionYaw)
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    private fun isDangerousEdgeAtYaw(yaw: Float, distance: Double, depth: Int): Boolean {
+        val fakePlayer = clientInstance.fakePlayer
+        val forward = vectorForRotation(0f, yaw)
+        val side = vectorForRotation(0f, yaw + 90f)
+        val sideOffset = min(0.28, max(fakePlayer.boundingBox.maxX - fakePlayer.boundingBox.minX, 0.6) * 0.45)
+        val offsets = doubleArrayOf(0.0, -sideOffset, sideOffset)
+
+        for (offset in offsets) {
+            val x = fakePlayer.x + forward[0] * distance + side[0] * offset
+            val z = fakePlayer.z + forward[2] * distance + side[2] * offset
+            val terrain = terrainAt(x, z)
+            if (terrain.liquidAhead || terrain.lavaAhead || terrain.dangerousDrop) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private fun findWalkableTopY(
+        world: ClientWorld,
+        x: Double,
+        z: Double,
+        baseY: Double,
+        halfWidth: Double
+    ): Double? {
+        val horizontalMargin = 0.03
+        val searchBox = ProbeBox(
+            x - halfWidth + horizontalMargin,
+            baseY - EDGE_SEARCH_DEPTH,
+            z - halfWidth + horizontalMargin,
+            x + halfWidth - horizontalMargin,
+            baseY + MAX_JUMP_HEIGHT,
+            z + halfWidth - horizontalMargin
+        )
+
+        return collisionBoxes(world, searchBox)
+            .asSequence()
+            .filter { horizontalIntersects(searchBox, it) }
+            .filter { it.maxY <= baseY + MAX_JUMP_HEIGHT + EPSILON }
+            .filter { it.maxY >= baseY - EDGE_SEARCH_DEPTH - EPSILON }
+            .map { it.maxY }
+            .maxOrNull()
+    }
+
+    private fun isPlayerSpaceClear(
+        world: ClientWorld,
+        x: Double,
+        y: Double,
+        z: Double,
+        halfWidth: Double,
+        height: Double
+    ): Boolean {
+        return !hasCollision(world, playerBoxAt(x, y, z, halfWidth, height))
+    }
+
+    private fun playerBoxAt(x: Double, y: Double, z: Double, halfWidth: Double, height: Double): ProbeBox {
+        val margin = 0.01
+        return ProbeBox(
+            x - halfWidth + margin,
+            y + EPSILON,
+            z - halfWidth + margin,
+            x + halfWidth - margin,
+            y + height,
+            z + halfWidth - margin
+        )
+    }
+
+    private fun hasCollision(world: ClientWorld, box: ProbeBox): Boolean {
+        return collisionBoxes(world, box).any { intersects(box, it) }
+    }
+
+    private fun collisionBoxes(world: ClientWorld, box: ProbeBox): List<BoundingBox> {
+        val boxes = mutableListOf<BoundingBox>()
+        val minX = floor(box.minX)
+        val maxX = floor(box.maxX + 1.0)
+        val minY = floor(box.minY)
+        val maxY = floor(box.maxY + 1.0)
+        val minZ = floor(box.minZ)
+        val maxZ = floor(box.maxZ + 1.0)
+
+        for (blockX in minX until maxX) {
+            for (blockY in minY until maxY) {
+                for (blockZ in minZ until maxZ) {
+                    val block = world.getBlockAt(blockX, blockY, blockZ)
+                    val rawCollisionBox = block.getCollisionBoundingBox(world, blockX, blockY, blockZ) ?: continue
+                    val collisionBox = normalizedCollisionBox(block, rawCollisionBox)
+                    if (intersects(box, collisionBox)) {
+                        boxes.add(collisionBox)
+                    }
+                }
+            }
+        }
+
+        return boxes
+    }
+
+    private fun normalizedCollisionBox(block: Block, collisionBox: BoundingBox): BoundingBox {
+        if (!block.javaClass.simpleName.contains("Stairs", ignoreCase = true)) {
+            return collisionBox
+        }
+
+        val maxStepY = collisionBox.minY + MAX_STEP_HEIGHT
+        if (collisionBox.maxY <= maxStepY) {
+            return collisionBox
+        }
+
+        return SimpleBoundingBox(
+            minX = collisionBox.minX,
+            minY = collisionBox.minY,
+            minZ = collisionBox.minZ,
+            maxX = collisionBox.maxX,
+            maxY = maxStepY,
+            maxZ = collisionBox.maxZ
+        )
+    }
+
+    private fun intersects(box: ProbeBox, collisionBox: BoundingBox): Boolean {
+        return horizontalIntersects(box, collisionBox) &&
+            box.maxY > collisionBox.minY &&
+            box.minY < collisionBox.maxY
+    }
+
+    private fun horizontalIntersects(box: ProbeBox, collisionBox: BoundingBox): Boolean {
+        return box.maxX > collisionBox.minX &&
+            box.minX < collisionBox.maxX &&
+            box.maxZ > collisionBox.minZ &&
+            box.minZ < collisionBox.maxZ
     }
 
     private fun buildSnapshot(tick: Int): Snapshot {
@@ -502,16 +649,24 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         val liquidAhead: Boolean,
         val frontBlocked: Boolean,
         val dropAhead: Boolean,
-        val lowProfileStep: Boolean
+        val lowProfileStep: Boolean,
+        val walkableTopY: Double?,
+        val stepDelta: Double,
+        val headClear: Boolean,
+        val passable: Boolean,
+        val requiresJump: Boolean,
+        val dangerousDrop: Boolean
     ) {
         val traversalScore: Int
             get() {
                 var score = 0
-                if (feetBlockId == Block.AIR) score += 2
-                if (headBlockId == Block.AIR) score += 2
-                if (groundBlockId != Block.AIR) score += 1
+                if (passable) score += 3
+                if (headClear) score += 1
+                if (lowProfileStep) score += 1
                 if (lavaAhead) score -= 5
-                if (dropAhead) score -= 4
+                if (liquidAhead) score -= 4
+                if (dangerousDrop) score -= 4
+                if (frontBlocked) score -= 3
                 return score
             }
     }
@@ -529,5 +684,31 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         ARROW,
         FISHING_HOOK,
         FIREBALL
+    }
+
+    private data class ProbeBox(
+        val minX: Double,
+        val minY: Double,
+        val minZ: Double,
+        val maxX: Double,
+        val maxY: Double,
+        val maxZ: Double
+    )
+
+    private data class SimpleBoundingBox(
+        override var minX: Double,
+        override var minY: Double,
+        override var minZ: Double,
+        override var maxX: Double,
+        override var maxY: Double,
+        override var maxZ: Double
+    ) : BoundingBox
+
+    companion object {
+        private const val EPSILON = 1.0E-4
+        private const val MAX_STEP_HEIGHT = 0.6
+        private const val MAX_JUMP_HEIGHT = 1.25
+        private const val MAX_SAFE_DROP_HEIGHT = 1.25
+        private const val EDGE_SEARCH_DEPTH = 5.0
     }
 }

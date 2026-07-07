@@ -733,8 +733,6 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     private fun applyTerrainAwareMovement() {
         val fakePlayer = clientInstance.fakePlayer
         val terrain = perception.terrainAhead(fakePlayer.yaw)
-        val nextFeetBlock = terrain.feetBlockId
-        val nextHeadBlock = terrain.headBlockId
 
         if (terrain.lavaAhead) {
             // Soft sidestep to avoid walking directly into lava.
@@ -760,15 +758,15 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             return
         }
 
-        // Don't drop into holes blindly.
-        if (terrain.dropAhead && fakePlayer.isOnGround) {
+        // Don't drop into void, liquids, or large falls blindly.
+        if (terrain.dangerousDrop && fakePlayer.isOnGround) {
             suppressForwardFor(3)
             pressKey(120, Key.Type.KEY_A)
             return
         }
 
-        // Auto-jump on small ledges / one-block highs, but not on carpet/snow-layer micro-steps.
-        if (!terrain.lowProfileStep && nextFeetBlock != Block.AIR && nextHeadBlock == Block.AIR && fakePlayer.isOnGround) {
+        // Jump only when the next collision top is too high for vanilla step-up.
+        if (terrain.requiresJump && fakePlayer.isOnGround) {
             pressKey(100, Key.Type.KEY_SPACE)
         }
     }
