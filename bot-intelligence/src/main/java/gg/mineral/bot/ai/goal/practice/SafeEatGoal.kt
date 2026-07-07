@@ -44,11 +44,10 @@ class SafeEatGoal(clientInstance: ClientInstance) :
         if (getFoodSlot() == -1) return false
         if (fakePlayer.hunger >= 20) return false
 
-        // Only eat if safe or really need it
+        // Only eat when far enough from enemies.
         val distance = distanceAwayFromEnemies()
-        val healthCritical = fakePlayer.health <= 8
 
-        return (distance >= 7.0 && fakePlayer.health >= 9) || healthCritical
+        return distance >= 10.0
     }
 
     override fun onStart() {

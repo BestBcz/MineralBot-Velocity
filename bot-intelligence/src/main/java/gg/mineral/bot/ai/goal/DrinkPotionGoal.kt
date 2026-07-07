@@ -68,10 +68,10 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val enemy = perception.nearestVisibleEnemy() ?: return true
         val waitedTicks = if (drinkWindowStartTick == -1) 0 else clientInstance.currentTick - drinkWindowStartTick
 
-        return enemy.distance3D >= 7.0 ||
-            (!enemy.pressuringSelf && !enemy.movingTowardSelf && enemy.distance3D >= 4.8) ||
-            (waitedTicks >= 80 && enemy.distance3D >= 4.4 && !enemy.movingTowardSelf && !enemy.lookingAtSelf) ||
-            (waitedTicks >= 160 && enemy.distance3D >= 4.0 && !enemy.pressuringSelf && !enemy.lookingAtSelf)
+        return enemy.distance3D >= 10.0 ||
+            (!enemy.pressuringSelf && !enemy.movingTowardSelf && enemy.distance3D >= 8.0) ||
+            (waitedTicks >= 80 && enemy.distance3D >= 7.0 && !enemy.movingTowardSelf && !enemy.lookingAtSelf) ||
+            (waitedTicks >= 160 && enemy.distance3D >= 6.5 && !enemy.pressuringSelf && !enemy.lookingAtSelf)
     }
 
     private fun canSeeEnemy(): Boolean {
