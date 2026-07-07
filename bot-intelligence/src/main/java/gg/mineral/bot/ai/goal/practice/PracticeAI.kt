@@ -99,7 +99,6 @@ object PracticeAI {
                 ReplaceArmorGoal(clientInstance),
                 FishingRodGoal(clientInstance), // Rod pressure should stay short-lived
                 BuildUHCCombatGoal(clientInstance), // BuildUHC-specific heads/gapples/lava/water
-                SafeEatGoal(clientInstance),
                 MeleeCombatGoal(clientInstance)
         )
     }
