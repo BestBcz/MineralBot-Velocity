@@ -30,7 +30,6 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
     private enum class RodState {
         IDLE,
-        THROWING,
         IN_FLIGHT
     }
 
@@ -46,7 +45,9 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         val enemy = getClosestEnemyState() ?: return false
         val distance = enemy.distance3D
 
-        return distance >= config.rodMinRange && distance <= config.rodMaxRange
+        return distance >= config.rodMinRange &&
+                distance <= config.rodMaxRange &&
+                enemy.lineOfSightLikelyClear
     }
 
     override fun onStart() {
@@ -101,6 +102,30 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
     }
 
+    private fun horizontalLeadTicks(enemyState: CombatPerception.PlayerState): Double {
+        val configuredLead = clientInstance.configuration.rodPredictionMultiplier
+        val distance = enemyState.distance2D
+        val maxLeadByRange =
+                when {
+                    distance <= 4.0 -> 1.05
+                    distance <= 7.0 -> 1.45
+                    else -> 1.95
+                }
+        val speedScale =
+                when {
+                    enemyState.horizontalSpeed >= 0.32 -> 0.70
+                    enemyState.horizontalSpeed >= 0.22 -> 0.85
+                    else -> 1.0
+                }
+        val approachScale = if (enemyState.movingTowardSelf) 0.85 else 1.0
+        return (configuredLead * speedScale * approachScale).coerceIn(0.45, maxLeadByRange)
+    }
+
+    private fun horizontalPredictionOffset(velocity: Double, leadTicks: Double, distance: Double): Double {
+        val maxOffset = (distance * 0.16).coerceIn(0.18, 0.85)
+        return (velocity * leadTicks).coerceIn(-maxOffset, maxOffset)
+    }
+
     override fun onTick(tick: Tick) {
         val rodSlot = getRodSlot()
         val fakePlayer = clientInstance.fakePlayer
@@ -139,9 +164,13 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         when (rodState) {
             RodState.IDLE -> {
                 val config = clientInstance.configuration
-                // Aim at enemy with prediction
-                val predictedX = enemyState.x + enemyState.velocityX * config.rodPredictionMultiplier
-                val predictedZ = enemyState.z + enemyState.velocityZ * config.rodPredictionMultiplier
+                val leadTicks = horizontalLeadTicks(enemyState)
+                val predictedX =
+                        enemyState.x +
+                                horizontalPredictionOffset(enemyState.velocityX, leadTicks, enemyState.distance2D)
+                val predictedZ =
+                        enemyState.z +
+                                horizontalPredictionOffset(enemyState.velocityZ, leadTicks, enemyState.distance2D)
 
                 val dx = predictedX - fakePlayer.x
                 val dz = predictedZ - fakePlayer.z
@@ -173,10 +202,6 @@ class FishingRodGoal(clientInstance: ClientInstance) :
                 setMouseYaw(yaw)
                 setMousePitch(pitch)
 
-                tick.execute { rodState = RodState.THROWING }
-            }
-
-            RodState.THROWING -> {
                 tick.execute {
                     pressButton(25, MouseButton.Type.RIGHT_CLICK)
                     rodState = RodState.IN_FLIGHT
@@ -187,7 +212,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
                 // No explicit reel-in needed: switch back to melee weapon,
                 // hook will be naturally cleaned up by item switch / later rod use.
                 tick.execute {
-                    if (tickCount > 4) {
+                    if (tickCount > 3) {
                         switchBackToMelee(inventory)
                         lastRodTick = clientInstance.currentTick
                         finish()

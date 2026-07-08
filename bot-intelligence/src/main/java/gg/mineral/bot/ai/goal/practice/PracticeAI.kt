@@ -97,8 +97,8 @@ object PracticeAI {
         return arrayOf(
                 SelectKitGoal(clientInstance),
                 ReplaceArmorGoal(clientInstance),
-                FishingRodGoal(clientInstance), // Rod pressure should stay short-lived
                 BuildUHCCombatGoal(clientInstance), // BuildUHC-specific heads/gapples/lava/water
+                FishingRodGoal(clientInstance), // Rod pressure should stay short-lived
                 MeleeCombatGoal(clientInstance)
         )
     }
