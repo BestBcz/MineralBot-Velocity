@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.mineralstudios.bot.velocity"
-version = "1.0-SNAPSHOT"
+version = "6.7-SNAPSHOT"
 
 repositories {
     mavenCentral()
