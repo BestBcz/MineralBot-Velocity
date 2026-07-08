@@ -18,8 +18,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
 
-@Plugin(id = "bot-velocity", name = "MineralBotVelocity", version = "1.0-SNAPSHOT", description = "Mineral-Bot integration for Velocity", authors = {
-        "MineralStudios" })
+@Plugin(id = "bot-velocity", name = "MineralBotVelocity", version = "6.7-SNAPSHOT", description = "Mineral-Bot integration for Velocity", authors = {
+        "BestBcz" })
 public class MineralBotVelocity {
     private static final String DEFAULT_BOT_CONNECT_HOST = "127.0.0.1";
     private static final int DEFAULT_BOT_CONNECT_PORT = 25567;
