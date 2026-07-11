@@ -22,6 +22,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         const val FLUID_RECOVERY_RANGE = 3.0
         const val FLUID_RECOVERY_MIN_ENEMY_DISTANCE = 5.0
         const val MAX_BUCKET_USE_DISTANCE = 5.15
+        const val BUCKET_AIM_TOLERANCE = 7f
+        const val EMERGENCY_WATER_PITCH = 88f
+        const val EMERGENCY_WATER_PITCH_TOLERANCE = 5f
     }
 
     override var executing: Boolean = false
@@ -34,6 +37,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     private var preFightGappleUsed = false
     private var waterState = WaterState.IDLE
     private var waterStateStartTick = 0
+    private var waterAimStartTick = -1
     private var lastGappleEatTick = -200
     private var lastHeadEatTick = -200
     private var placedLavaTick = -200
@@ -41,13 +45,19 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     private var placedLavaX = Double.NaN
     private var placedLavaY = Double.NaN
     private var placedLavaZ = Double.NaN
+    private var pendingLavaTarget: BlockUseTarget? = null
+    private var lavaAimStartTick = -1
+    private var pendingRecoveryTarget: FluidTarget? = null
+    private var recoveryAimStartTick = -1
     private var eatState = EatState.NONE
     private var eatStartTick = -1
     private val perception = CombatPerception(clientInstance)
 
     private enum class WaterState {
         IDLE,
-        WAIT_TO_PICKUP
+        AIMING_TO_PLACE,
+        WAIT_TO_PICKUP,
+        AIMING_TO_PICKUP
     }
 
     private enum class EatState {
@@ -96,6 +106,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     override fun onStart() {
         actionLockUntilTick = 0
         waterState = WaterState.IDLE
+        waterAimStartTick = -1
+        pendingLavaTarget = null
+        lavaAimStartTick = -1
+        pendingRecoveryTarget = null
+        recoveryAimStartTick = -1
     }
 
     private fun isEatingApple(): Boolean = eatState != EatState.NONE
@@ -130,8 +145,19 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         unpressKey(Key.Type.KEY_A, Key.Type.KEY_D, Key.Type.KEY_S)
     }
 
-    private fun isAimAligned(currentYaw: Float, targetYaw: Float, tolerance: Float = 8f): Boolean {
-        return kotlin.math.abs(angleDifference(currentYaw, targetYaw)) <= tolerance
+    private fun isAimAligned(
+        target: AimAngles,
+        yawTolerance: Float = BUCKET_AIM_TOLERANCE,
+        pitchTolerance: Float = BUCKET_AIM_TOLERANCE
+    ): Boolean {
+        val fakePlayer = clientInstance.fakePlayer
+        return kotlin.math.abs(angleDifference(fakePlayer.yaw, target.yaw)) <= yawTolerance &&
+                kotlin.math.abs(angleDifference(fakePlayer.pitch, target.pitch)) <= pitchTolerance
+    }
+
+    private fun aimAt(target: AimAngles) {
+        setMouseYaw(target.yaw)
+        setMousePitch(target.pitch)
     }
 
     private fun hasLava(): Boolean {
@@ -550,6 +576,24 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return best
     }
 
+    private fun isLavaPlacementTargetUsable(target: BlockUseTarget): Boolean {
+        val fakePlayer = clientInstance.fakePlayer
+        val world = fakePlayer.world
+        val targetId = world.getBlockAt(target.blockX, target.blockY, target.blockZ).id
+        val belowId = world.getBlockAt(target.blockX, target.blockY - 1, target.blockZ).id
+        if (!isReplaceableForFluid(targetId) || isFluidBlock(belowId)) return false
+        if (!hasSolidSupport(target.blockX, target.blockY - 1, target.blockZ)) return false
+
+        val dx = target.aimX - fakePlayer.x
+        val dy = target.aimY - (fakePlayer.y + fakePlayer.eyeHeight)
+        val dz = target.aimZ - fakePlayer.z
+        val horizontalDistance = sqrt(dx * dx + dz * dz)
+        val eyeDistance = sqrt(dx * dx + dy * dy + dz * dz)
+        if (horizontalDistance < 1.15 || eyeDistance > MAX_BUCKET_USE_DISTANCE) return false
+
+        return hasClearUseLineTo(target.aimX, target.aimY + 0.03, target.aimZ)
+    }
+
     private fun findNearestRecoverableFluid(radius: Double = FLUID_RECOVERY_RANGE): FluidTarget? {
         val fakePlayer = clientInstance.fakePlayer
         val world = fakePlayer.world
@@ -575,7 +619,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                                             (aimY - fakePlayer.y) * (aimY - fakePlayer.y) +
                                             (aimZ - fakePlayer.z) * (aimZ - fakePlayer.z)
                             )
-                    if (dist <= radius) {
+                    if (dist <= radius && hasClearUseLineTo(aimX, aimY, aimZ)) {
                         val sourceBias =
                                 if (id == Block.WATER_STILL || id == Block.LAVA_STILL) 0.0 else 0.35
                         val score = dist + sourceBias
@@ -601,12 +645,30 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                                         (aimY - fakePlayer.y) * (aimY - fakePlayer.y) +
                                         (aimZ - fakePlayer.z) * (aimZ - fakePlayer.z)
                         )
-                if (dist <= radius) {
+                if (dist <= radius && hasClearUseLineTo(aimX, aimY, aimZ)) {
                     return FluidTarget(aimX, aimY, aimZ, 0.0)
                 }
             }
         }
         return null
+    }
+
+    private fun isRecoverableFluidTargetUsable(
+        target: FluidTarget,
+        radius: Double = FLUID_RECOVERY_RANGE
+    ): Boolean {
+        val fakePlayer = clientInstance.fakePlayer
+        val blockX = floor(target.x)
+        val blockY = floor(target.y)
+        val blockZ = floor(target.z)
+        if (!isFluidBlock(fakePlayer.world.getBlockAt(blockX, blockY, blockZ).id)) return false
+
+        val dx = target.x - fakePlayer.x
+        val dy = target.y - fakePlayer.y
+        val dz = target.z - fakePlayer.z
+        if (sqrt(dx * dx + dy * dy + dz * dz) > radius) return false
+
+        return hasClearUseLineTo(target.x, target.y, target.z)
     }
 
     private fun shouldRecoverPlacedFluid(enemy: CombatPerception.PlayerState?): Boolean {
@@ -630,15 +692,30 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         }
 
         tick.execute {
-            val target = findNearestRecoverableFluid()
-            if (target != null) {
-                val angles = anglesToPoint(target.x, target.y, target.z)
-                setMouseYaw(angles.yaw)
-                setMousePitch(angles.pitch.coerceIn(-20f, 85f))
-            } else {
-                setMousePitch(86f)
+            var target = pendingRecoveryTarget
+            if (target == null || !isRecoverableFluidTargetUsable(target)) {
+                pendingRecoveryTarget = findNearestRecoverableFluid()
+                recoveryAimStartTick = clientInstance.currentTick
+                target = pendingRecoveryTarget
             }
+
+            if (target == null || !isRecoverableFluidTargetUsable(target)) {
+                pendingRecoveryTarget = null
+                recoveryAimStartTick = -1
+                return@execute
+            }
+
+            val rawAngles = anglesToPoint(target.x, target.y, target.z)
+            val angles = AimAngles(rawAngles.yaw, rawAngles.pitch.coerceIn(-20f, 85f))
+            aimAt(angles)
+
+            if (clientInstance.currentTick <= recoveryAimStartTick || !isAimAligned(angles)) {
+                return@execute
+            }
+
             pressButton(55, MouseButton.Type.RIGHT_CLICK)
+            pendingRecoveryTarget = null
+            recoveryAimStartTick = -1
             lockAction(4)
         }
         return true
@@ -646,7 +723,10 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     private fun handleEmergencyWater(tick: Tick, inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
         val waterSlot =
-            if (waterState == WaterState.IDLE) getWaterPlacementSlot() else getBucketRecoverySlot()
+            when (waterState) {
+                WaterState.IDLE, WaterState.AIMING_TO_PLACE -> getWaterPlacementSlot()
+                WaterState.WAIT_TO_PICKUP, WaterState.AIMING_TO_PICKUP -> getBucketRecoverySlot()
+            }
         if (waterSlot == -1) {
             if (waterState != WaterState.IDLE && clientInstance.currentTick - waterStateStartTick < 16) {
                 lockAction(2)
@@ -667,22 +747,48 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         }
 
         tick.execute {
-            setMousePitch(88f)
-
             if (waterState == WaterState.IDLE) {
-                // Place water first.
+                waterState = WaterState.AIMING_TO_PLACE
+                waterAimStartTick = clientInstance.currentTick
+                waterStateStartTick = clientInstance.currentTick
+            }
+
+            setMousePitch(EMERGENCY_WATER_PITCH)
+            val pitchAligned =
+                kotlin.math.abs(
+                    angleDifference(clientInstance.fakePlayer.pitch, EMERGENCY_WATER_PITCH)
+                ) <= EMERGENCY_WATER_PITCH_TOLERANCE
+
+            if (waterState == WaterState.AIMING_TO_PLACE) {
+                if (clientInstance.currentTick <= waterAimStartTick || !pitchAligned) {
+                    return@execute
+                }
+
                 pressButton(80, MouseButton.Type.RIGHT_CLICK)
                 waterState = WaterState.WAIT_TO_PICKUP
                 waterStateStartTick = clientInstance.currentTick
+                waterAimStartTick = -1
                 placedWaterTick = clientInstance.currentTick
                 lockAction(8)
                 return@execute
             }
 
-            // Wait ~0.3s (6 ticks) before trying to pick water back up.
-            if (clientInstance.currentTick - waterStateStartTick >= 6) {
+            if (waterState == WaterState.WAIT_TO_PICKUP &&
+                    clientInstance.currentTick - waterStateStartTick >= 6
+            ) {
+                waterState = WaterState.AIMING_TO_PICKUP
+                waterAimStartTick = clientInstance.currentTick
+                return@execute
+            }
+
+            if (waterState == WaterState.AIMING_TO_PICKUP) {
+                if (clientInstance.currentTick <= waterAimStartTick || !pitchAligned) {
+                    return@execute
+                }
+
                 pressButton(80, MouseButton.Type.RIGHT_CLICK)
                 waterState = WaterState.IDLE
+                waterAimStartTick = -1
                 lockAction(6)
             }
         }
@@ -789,7 +895,10 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             }
         }
 
-        if (canStartAction() && enemy != null && shouldPlaceLava(enemy)) {
+        if (canStartAction() &&
+                enemy != null &&
+                (pendingLavaTarget != null || shouldPlaceLava(enemy))
+        ) {
             val lavaSlot = getLavaSlot()
             if (lavaSlot != -1) {
                 tick.prerequisite("Lava In Hotbar", lavaSlot <= 8) {
@@ -802,18 +911,34 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                     selectHotbarSlot(resolveHotbarSlot(lavaSlot))
                 }
                 tick.execute {
-                    val target = findLavaPlacementTarget(enemy) ?: return@execute
+                    var target = pendingLavaTarget
+                    if (target == null || !isLavaPlacementTargetUsable(target)) {
+                        pendingLavaTarget = findLavaPlacementTarget(enemy)
+                        lavaAimStartTick = clientInstance.currentTick
+                        target = pendingLavaTarget
+                    }
+
+                    if (target == null || !isLavaPlacementTargetUsable(target)) {
+                        pendingLavaTarget = null
+                        lavaAimStartTick = -1
+                        return@execute
+                    }
+
                     val angles = anglesToPoint(target.aimX, target.aimY + 0.03, target.aimZ)
                     val pitch = (angles.pitch + 4f).coerceIn(18f, 82f)
+                    val aimTarget = AimAngles(angles.yaw, pitch)
 
-                    setMouseYaw(angles.yaw)
-                    setMousePitch(pitch)
+                    aimAt(aimTarget)
 
-                    if (!isAimAligned(fakePlayer.yaw, angles.yaw, 11f)) {
+                    if (clientInstance.currentTick <= lavaAimStartTick ||
+                            !isAimAligned(aimTarget)
+                    ) {
                         return@execute
                     }
 
                     pressButton(50, MouseButton.Type.RIGHT_CLICK)
+                    pendingLavaTarget = null
+                    lavaAimStartTick = -1
                     lastLavaPlaceTick = clientInstance.currentTick
                     placedLavaTick = clientInstance.currentTick
                     placedLavaX = target.blockX.toDouble()
@@ -850,6 +975,11 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         clearEatingState()
         unpressKey(Key.Type.KEY_A, Key.Type.KEY_D)
         waterState = WaterState.IDLE
+        waterAimStartTick = -1
+        pendingLavaTarget = null
+        lavaAimStartTick = -1
+        pendingRecoveryTarget = null
+        recoveryAimStartTick = -1
     }
 
     override fun onEvent(event: Event): Boolean {
