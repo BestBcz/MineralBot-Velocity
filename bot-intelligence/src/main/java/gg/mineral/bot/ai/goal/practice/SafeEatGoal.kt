@@ -26,6 +26,11 @@ import gg.mineral.bot.api.inv.item.ItemStack
  */
 class SafeEatGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
+    private companion object {
+        const val FIRST_RELAXATION_TICKS = 2 * 20
+        const val SECOND_RELAXATION_TICKS = 4 * 20
+    }
+
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val maxDuration: Long = 120
@@ -70,8 +75,8 @@ class SafeEatGoal(clientInstance: ClientInstance) :
 
         return enemy.distance3D >= 10.0 ||
                 (!enemy.pressuringSelf && !enemy.movingTowardSelf && enemy.distance3D >= 8.0) ||
-                (waitedTicks >= 80 && enemy.distance3D >= 7.0 && !enemy.movingTowardSelf && !enemy.lookingAtSelf) ||
-                (waitedTicks >= 160 && enemy.distance3D >= 6.5 && !enemy.pressuringSelf && !enemy.lookingAtSelf)
+                (waitedTicks >= FIRST_RELAXATION_TICKS && enemy.distance3D >= 7.0 && !enemy.movingTowardSelf && !enemy.lookingAtSelf) ||
+                (waitedTicks >= SECOND_RELAXATION_TICKS && enemy.distance3D >= 6.5 && !enemy.pressuringSelf && !enemy.lookingAtSelf)
     }
 
     private fun angleAwayFromEnemies(): Float {
