@@ -212,7 +212,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
                 // No explicit reel-in needed: switch back to melee weapon,
                 // hook will be naturally cleaned up by item switch / later rod use.
                 tick.execute {
-                    if (tickCount > 3) {
+                    if (tickCount > 5) {
                         switchBackToMelee(inventory)
                         lastRodTick = clientInstance.currentTick
                         finish()
