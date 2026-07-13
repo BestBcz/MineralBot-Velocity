@@ -1,5 +1,7 @@
 package gg.mineral.bot.api.configuration
 
+import gg.mineral.bot.api.entity.living.player.skin.Skins
+
 enum class BotDifficulty(
     val id: String,
     val displayName: String,
@@ -121,7 +123,14 @@ enum class BotDifficulty(
         0.80
     );
 
+    val skin: Skins
+        get() = when (this) {
+            NOOB -> Skins.MINERAL_GREEN
+            NORMAL, PRO -> Skins.BCZ
+        }
+
     fun applyTo(configuration: BotConfiguration) {
+        configuration.skin = skin
         configuration.averageCps = averageCps
         configuration.cpsDeviation = cpsDeviation
         configuration.horizontalAimSpeed = horizontalAimSpeed
