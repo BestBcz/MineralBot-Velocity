@@ -480,6 +480,15 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return AimAngles(yaw, pitch)
     }
 
+    private fun pitchToRecoveryTarget(target: FluidTarget): Float {
+        val fakePlayer = clientInstance.fakePlayer
+        val dx = target.x - fakePlayer.x
+        val dy = target.y - (fakePlayer.headY + fakePlayer.eyeHeight)
+        val dz = target.z - fakePlayer.z
+        val horizontalDistance = sqrt(dx * dx + dz * dz).coerceAtLeast(0.001)
+        return toDegrees(-fastArcTan2(dy, horizontalDistance)).toFloat().coerceIn(-20f, 85f)
+    }
+
     private fun hasClearUseLineTo(x: Double, y: Double, z: Double): Boolean {
         val fakePlayer = clientInstance.fakePlayer
         val world = fakePlayer.world
@@ -706,7 +715,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             }
 
             val rawAngles = anglesToPoint(target.x, target.y, target.z)
-            val angles = AimAngles(rawAngles.yaw, rawAngles.pitch.coerceIn(-20f, 85f))
+            val angles = AimAngles(rawAngles.yaw, pitchToRecoveryTarget(target))
             aimAt(angles)
 
             if (clientInstance.currentTick <= recoveryAimStartTick || !isAimAligned(angles)) {
