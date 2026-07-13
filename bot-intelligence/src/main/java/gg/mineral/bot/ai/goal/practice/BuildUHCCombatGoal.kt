@@ -469,10 +469,15 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 id == Block.CARPET
     }
 
+    private fun interactionEyeY(): Double {
+        val fakePlayer = clientInstance.fakePlayer
+        return fakePlayer.headY + fakePlayer.eyeHeight
+    }
+
     private fun anglesToPoint(x: Double, y: Double, z: Double): AimAngles {
         val fakePlayer = clientInstance.fakePlayer
         val dx = x - fakePlayer.x
-        val dy = y - (fakePlayer.y + fakePlayer.eyeHeight)
+        val dy = y - interactionEyeY()
         val dz = z - fakePlayer.z
         val horizontalDistance = sqrt(dx * dx + dz * dz).coerceAtLeast(0.001)
         val yaw = toDegrees(fastArcTan2(-dx, dz)).toFloat()
@@ -483,7 +488,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     private fun pitchToRecoveryTarget(target: FluidTarget): Float {
         val fakePlayer = clientInstance.fakePlayer
         val dx = target.x - fakePlayer.x
-        val dy = target.y - (fakePlayer.headY + fakePlayer.eyeHeight)
+        val dy = target.y - interactionEyeY()
         val dz = target.z - fakePlayer.z
         val horizontalDistance = sqrt(dx * dx + dz * dz).coerceAtLeast(0.001)
         return toDegrees(-fastArcTan2(dy, horizontalDistance)).toFloat().coerceIn(-20f, 85f)
@@ -493,7 +498,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val fakePlayer = clientInstance.fakePlayer
         val world = fakePlayer.world
         val startX = fakePlayer.x
-        val startY = fakePlayer.y + fakePlayer.eyeHeight
+        val startY = interactionEyeY()
         val startZ = fakePlayer.z
         val dx = x - startX
         val dy = y - startY
@@ -558,7 +563,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                         (aimX - fakePlayer.x) * (aimX - fakePlayer.x) +
                                 (aimZ - fakePlayer.z) * (aimZ - fakePlayer.z)
                 )
-                val eyeY = fakePlayer.y + fakePlayer.eyeHeight
+                val eyeY = interactionEyeY()
                 val eyeDistance = sqrt(
                         (aimX - fakePlayer.x) * (aimX - fakePlayer.x) +
                                 (aimY - eyeY) * (aimY - eyeY) +
@@ -594,7 +599,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (!hasSolidSupport(target.blockX, target.blockY - 1, target.blockZ)) return false
 
         val dx = target.aimX - fakePlayer.x
-        val dy = target.aimY - (fakePlayer.y + fakePlayer.eyeHeight)
+        val dy = target.aimY - interactionEyeY()
         val dz = target.aimZ - fakePlayer.z
         val horizontalDistance = sqrt(dx * dx + dz * dz)
         val eyeDistance = sqrt(dx * dx + dy * dy + dz * dz)
