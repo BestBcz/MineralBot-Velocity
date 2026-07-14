@@ -5,11 +5,9 @@ import com.google.common.io.ByteArrayDataOutput;
 import com.google.common.io.ByteStreams;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
-import com.velocitypowered.api.event.player.GameProfileRequestEvent;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
-import com.velocitypowered.api.util.GameProfile;
 import org.slf4j.Logger;
 
 import java.util.Map;
@@ -18,7 +16,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.io.File;
-import java.util.ArrayList;
 
 import gg.mineral.bot.base.client.instance.ClientInstance;
 import gg.mineral.bot.base.client.gui.GuiConnecting;
@@ -26,7 +23,6 @@ import gg.mineral.bot.api.entity.ClientEntity;
 import gg.mineral.bot.api.configuration.BotDifficulty;
 import gg.mineral.bot.api.configuration.BotConfiguration;
 import gg.mineral.bot.api.entity.living.player.ClientPlayer;
-import gg.mineral.bot.api.entity.living.player.skin.Skins;
 import gg.mineral.bot.ai.goal.practice.PracticeAI;
 import com.google.common.collect.ArrayListMultimap;
 import java.net.Proxy;
@@ -962,22 +958,4 @@ public class VelocityBotManager {
         }
     }
 
-    @Subscribe
-    public void onGameProfileRequest(GameProfileRequestEvent event) {
-        UUID botUUID = botsByUsername.get(event.getUsername());
-        if (botUUID == null) {
-            return;
-        }
-
-        BotDifficulty difficulty = botDifficulties.get(botUUID);
-        if (difficulty == null) {
-            return;
-        }
-
-        Skins skin = difficulty.getSkin();
-        ArrayList<GameProfile.Property> properties = new ArrayList<>(event.getGameProfile().getProperties());
-        properties.removeIf(property -> property.getName().equals("textures"));
-        properties.add(new GameProfile.Property("textures", skin.getValue(), skin.getSignature()));
-        event.setGameProfile(event.getGameProfile().withProperties(properties));
-    }
 }
