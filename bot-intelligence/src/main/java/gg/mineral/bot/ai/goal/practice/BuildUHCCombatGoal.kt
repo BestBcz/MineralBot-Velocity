@@ -5,7 +5,6 @@ import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
 import gg.mineral.bot.api.entity.effect.PotionEffectType
-import gg.mineral.bot.api.entity.living.player.ClientPlayer
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.goal.GoalDebugState
 import gg.mineral.bot.api.goal.Sporadic
@@ -382,59 +381,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         return true
     }
 
-    private fun isSafeToEat(enemy: CombatPerception.PlayerState?): Boolean {
-        val fakePlayer = clientInstance.fakePlayer
-        if (enemy == null) return true
-        if (fakePlayer.health <= 2.5f) return true
-        return enemy.distance3D >= 4.4 && (!enemy.pressuringSelf || enemy.distance3D >= 6.2)
-    }
-
-    private fun getRodSlot(): Int {
-        val inventory = clientInstance.fakePlayer.inventory
-        for (i in 0..35) {
-            val item = inventory.getItemStackAt(i) ?: continue
-            if (item.item.id == Item.FISHING_ROD) return i
-        }
-        return -1
-    }
-
-    private fun tryCreateEatWindow(
-        tick: Tick,
-        enemy: CombatPerception.PlayerState,
-        inventory: gg.mineral.bot.api.inv.Inventory
-    ): Boolean {
-        val rodSlot = getRodSlot()
-        if (rodSlot == -1) return false
-
-        tick.prerequisite("Rod In Hotbar", rodSlot <= 8) { moveItemToHotbar(rodSlot, inventory) }
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
-            pressKey(10, Key.Type.KEY_ESCAPE)
-        }
-        tick.prerequisite("Holding Rod", inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
-            selectHotbarSlot(resolveHotbarSlot(rodSlot))
-        }
-
-        tick.execute {
-            val bot = clientInstance.fakePlayer
-            val leadTicks = if (enemy.movingTowardSelf) 1.6 else 2.4
-            val predictedX = enemy.x + enemy.velocityX * leadTicks
-            val predictedY = enemy.y + enemy.entity.eyeHeight * 0.57
-            val predictedZ = enemy.z + enemy.velocityZ * leadTicks
-
-            val predictedEnemy = object : ClientPlayer by enemy.entity {
-                override val x: Double get() = predictedX
-                override val y: Double get() = predictedY
-                override val z: Double get() = predictedZ
-            }
-            val angles = computeOptimalYawAndPitch(bot, predictedEnemy)
-            setMouseYaw(angles[1])
-            setMousePitch((angles[0] + 4f).coerceIn(-14f, 38f))
-            pressButton(35, MouseButton.Type.RIGHT_CLICK)
-            lockAction(5)
-        }
-        return true
-    }
-
     private data class AimAngles(val yaw: Float, val pitch: Float)
 
     private data class FluidTarget(val x: Double, val y: Double, val z: Double, val score: Double)
@@ -454,6 +400,12 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 id == Block.WATER_STILL ||
                 id == Block.LAVA_FLOWING ||
                 id == Block.LAVA_STILL
+    }
+
+    private fun isFluidSource(x: Int, y: Int, z: Int): Boolean {
+        val world = clientInstance.fakePlayer.world
+        return isFluidBlock(world.getBlockAt(x, y, z).id) &&
+                world.getBlockMetadataAt(x, y, z) == 0
     }
 
     private fun isReplaceableForFluid(id: Int): Boolean {
@@ -622,8 +574,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                     val bx = baseX + x
                     val by = baseY + y
                     val bz = baseZ + z
-                    val id = world.getBlockAt(bx, by, bz).id
-                    if (!isFluidBlock(id)) continue
+                    if (!isFluidSource(bx, by, bz)) continue
                     val aimX = bx + 0.5
                     val aimY = by + 0.45
                     val aimZ = bz + 0.5
@@ -634,11 +585,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                                             (aimZ - fakePlayer.z) * (aimZ - fakePlayer.z)
                             )
                     if (dist <= radius && hasClearUseLineTo(aimX, aimY, aimZ)) {
-                        val sourceBias =
-                                if (id == Block.WATER_STILL || id == Block.LAVA_STILL) 0.0 else 0.35
-                        val score = dist + sourceBias
-                        if (best == null || score < best!!.score) {
-                            best = FluidTarget(aimX, aimY, aimZ, score)
+                        if (best == null || dist < best!!.score) {
+                            best = FluidTarget(aimX, aimY, aimZ, dist)
                         }
                     }
                 }
@@ -648,8 +596,10 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (best != null) return best
 
         if (!placedLavaX.isNaN()) {
-            val id = world.getBlockAt(placedLavaX, placedLavaY, placedLavaZ).id
-            if (id == Block.LAVA_FLOWING || id == Block.LAVA_STILL) {
+            val blockX = floor(placedLavaX)
+            val blockY = floor(placedLavaY)
+            val blockZ = floor(placedLavaZ)
+            if (isFluidSource(blockX, blockY, blockZ)) {
                 val aimX = placedLavaX + 0.5
                 val aimY = placedLavaY + 0.45
                 val aimZ = placedLavaZ + 0.5
@@ -675,7 +625,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val blockX = floor(target.x)
         val blockY = floor(target.y)
         val blockZ = floor(target.z)
-        if (!isFluidBlock(fakePlayer.world.getBlockAt(blockX, blockY, blockZ).id)) return false
+        if (!isFluidSource(blockX, blockY, blockZ)) return false
 
         val dx = target.x - fakePlayer.x
         val dy = target.y - fakePlayer.y
@@ -859,9 +809,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         }
 
         if (needsGoldenHead() && canEatHeadNow(fakePlayer.health)) {
-            if (!isSafeToEat(enemy)) {
-                if (enemy != null && tryCreateEatWindow(tick, enemy, inventory)) return
-            }
             val headSlot = getGoldenAppleSlot(preferHead = true)
             if (headSlot != -1) {
                 tick.prerequisite("Head In Hotbar", headSlot <= 8) {
@@ -884,10 +831,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         }
 
         if (needsGoldenApple() && fakePlayer.health < GAPPLE_EAT_THRESHOLD && canEatGappleNow(fakePlayer.health)) {
-            // Intentionally avoid the low-health rod opener here so BuildUHC gapple timing stays smoother.
-            // if (!isSafeToEat(enemy)) {
-            //     if (enemy != null && tryCreateEatWindow(tick, enemy, inventory)) return
-            // }
             val gappleSlot = getGoldenAppleSlot()
             if (gappleSlot != -1) {
                 tick.prerequisite("Gapple In Hotbar", gappleSlot <= 8) {

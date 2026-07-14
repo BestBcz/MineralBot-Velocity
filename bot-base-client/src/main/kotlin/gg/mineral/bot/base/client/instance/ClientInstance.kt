@@ -541,6 +541,8 @@ open class ClientInstance(
                                         }
                                     }
                                 }
+
+                                override fun getBlockMetadataAt(x: Int, y: Int, z: Int): Int = 0
                             }
                 override val random: Random
                     get() = Random()

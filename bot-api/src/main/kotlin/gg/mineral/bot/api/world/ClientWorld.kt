@@ -38,4 +38,14 @@ interface ClientWorld {
      * @return the block at the specified coordinates
      */
     fun getBlockAt(x: Double, y: Double, z: Double): Block
+
+    /**
+     * Gets the metadata of the block at the specified coordinates.
+     *
+     * @param x the x-coordinate
+     * @param y the y-coordinate
+     * @param z the z-coordinate
+     * @return the block metadata
+     */
+    fun getBlockMetadataAt(x: Int, y: Int, z: Int): Int
 }

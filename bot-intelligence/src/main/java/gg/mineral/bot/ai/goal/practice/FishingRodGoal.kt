@@ -20,6 +20,10 @@ import gg.mineral.bot.api.inv.item.Item
  */
 class FishingRodGoal(clientInstance: ClientInstance) :
         InventoryGoal(clientInstance), Sporadic, Timebound {
+    private companion object {
+        const val MELEE_DANGER_RANGE = 3.1
+    }
+
     override var executing: Boolean = false
     override var startTime: Long = 0
     override val maxDuration: Long = 12
@@ -45,7 +49,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         val enemy = getClosestEnemyState() ?: return false
         val distance = enemy.distance3D
 
-        return distance >= config.rodMinRange &&
+        return distance > maxOf(config.rodMinRange, MELEE_DANGER_RANGE) &&
                 distance <= config.rodMaxRange &&
                 enemy.lineOfSightLikelyClear
     }
@@ -144,7 +148,7 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
         // Enemy in hit range -> immediately hand control back to melee goal.
         val distance = enemyState.distance3D
-        if (distance <= clientInstance.configuration.rodCancelRange) {
+        if (distance <= MELEE_DANGER_RANGE) {
             tick.execute {
                 switchBackToMelee(inventory)
                 lastRodTick = clientInstance.currentTick
