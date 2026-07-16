@@ -402,6 +402,21 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
                 id == Block.LAVA_STILL
     }
 
+    private fun isWaterBlock(x: Int, y: Int, z: Int): Boolean {
+        val id = clientInstance.fakePlayer.world.getBlockAt(x, y, z).id
+        return id == Block.WATER_FLOWING || id == Block.WATER_STILL
+    }
+
+    private fun hasWaterAtOrAdjacent(x: Int, y: Int, z: Int): Boolean {
+        return isWaterBlock(x, y, z) ||
+                isWaterBlock(x - 1, y, z) ||
+                isWaterBlock(x + 1, y, z) ||
+                isWaterBlock(x, y - 1, z) ||
+                isWaterBlock(x, y + 1, z) ||
+                isWaterBlock(x, y, z - 1) ||
+                isWaterBlock(x, y, z + 1)
+    }
+
     private fun isFluidSource(x: Int, y: Int, z: Int): Boolean {
         val world = clientInstance.fakePlayer.world
         return isFluidBlock(world.getBlockAt(x, y, z).id) &&
@@ -481,6 +496,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             val targetId = world.getBlockAt(x, y, z).id
             val belowId = world.getBlockAt(x, y - 1, z).id
             if (isReplaceableForFluid(targetId) &&
+                    !hasWaterAtOrAdjacent(x, y, z) &&
                     !isFluidBlock(belowId) &&
                     hasSolidSupport(x, y - 1, z)
             ) {
@@ -548,6 +564,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val targetId = world.getBlockAt(target.blockX, target.blockY, target.blockZ).id
         val belowId = world.getBlockAt(target.blockX, target.blockY - 1, target.blockZ).id
         if (!isReplaceableForFluid(targetId) || isFluidBlock(belowId)) return false
+        if (hasWaterAtOrAdjacent(target.blockX, target.blockY, target.blockZ)) return false
         if (!hasSolidSupport(target.blockX, target.blockY - 1, target.blockZ)) return false
 
         val dx = target.aimX - fakePlayer.x
