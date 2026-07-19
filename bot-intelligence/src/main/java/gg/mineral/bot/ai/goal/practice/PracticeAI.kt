@@ -88,7 +88,7 @@ object PracticeAI {
     private fun getSumoGoals(clientInstance: ClientInstance): Array<Goal> {
         return arrayOf(
                 SelectKitGoal(clientInstance),
-                SumoCombatGoal(clientInstance) // Special sumo combat
+                MeleeCombatGoal(clientInstance)
         )
     }
 
