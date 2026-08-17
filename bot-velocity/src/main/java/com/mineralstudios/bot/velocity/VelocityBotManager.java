@@ -226,11 +226,13 @@ public class VelocityBotManager {
             String kitType,
             BotDifficulty difficulty,
             String requestToken,
+            int latencyMillis,
             int nextRetryCount,
             long delayMillis
     ) {
         server.getScheduler().buildTask(plugin, () ->
-                createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, nextRetryCount)
+                createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
+                        nextRetryCount)
         ).delay(delayMillis, TimeUnit.MILLISECONDS).schedule();
     }
 
@@ -241,6 +243,7 @@ public class VelocityBotManager {
             String kitType,
             BotDifficulty difficulty,
             String requestToken,
+            int latencyMillis,
             int retryCount,
             String botUsername
     ) {
@@ -276,7 +279,7 @@ public class VelocityBotManager {
         if (!duelStarted && retryCount < 3) {
             logger.warn("Bot {} stalled before duel start, recreating (retry #{})",
                     botUsername, retryCount + 1);
-            scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken,
+            scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
                     retryCount + 1, BOT_RECREATE_DELAY_MILLIS);
         } else if (diagnostics != null) {
             notifyBotDuelFailed(diagnostics, "game-loop-stall", detail);
@@ -563,6 +566,7 @@ public class VelocityBotManager {
             String kitType,
             BotDifficulty difficulty,
             String requestToken,
+            int latencyMillis,
             int retryCount,
             String botUsername
     ) {
@@ -585,11 +589,11 @@ public class VelocityBotManager {
 
         if (!duelStarted && frequentKick && retryCount < 3) {
             logger.warn("Bot {} was kicked for frequent connection. Retrying (#{})", botUsername, retryCount + 1);
-            scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken,
+            scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
                     retryCount + 1, 1_000L);
         } else if (!duelStarted && timeoutLike && retryCount < 3) {
             logger.warn("Bot {} hit read timeout, recreating (retry #{})", botUsername, retryCount + 1);
-            scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken,
+            scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
                     retryCount + 1, BOT_RECREATE_DELAY_MILLIS);
         } else if (diagnostics != null) {
             String reason = frequentKick ? "frequent-connection-kick" : timeoutLike ? "read-timeout" : "bot-disconnected";
@@ -655,13 +659,20 @@ public class VelocityBotManager {
             String kitType = in.readUTF();
             BotDifficulty difficulty = BotDifficulty.fromId(in.readUTF());
             String requestToken = in.readUTF();
+            int latencyMillis;
+            try {
+                latencyMillis = Math.max(0, in.readInt());
+            } catch (IllegalStateException ignored) {
+                // Keep requests from older practice-server builds compatible.
+                latencyMillis = 0;
+            }
 
             UUID playerUUID = UUID.fromString(playerUUIDStr);
 
-            logger.info("Received BotDuel request: Player={}, Server={}, Kit={}, Difficulty={}, Token={}",
-                    playerUUID, serverName, kitType, difficulty.getId(), requestToken);
+            logger.info("Received BotDuel request: Player={}, Server={}, Kit={}, Difficulty={}, Latency={}ms, Token={}",
+                    playerUUID, serverName, kitType, difficulty.getId(), latencyMillis, requestToken);
 
-            createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, 0);
+            createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis, 0);
         } catch (Exception e) {
             logger.error("Failed to parse BotDuel message", e);
         }
@@ -750,6 +761,7 @@ public class VelocityBotManager {
             String kitType,
             BotDifficulty difficulty,
             String requestToken,
+            int latencyMillis,
             int retryCount
     ) {
         server.getScheduler().buildTask(plugin, () -> {
@@ -779,6 +791,7 @@ public class VelocityBotManager {
                 config.setUsername(botUsername);
                 config.setDebug(false);
                 difficulty.applyTo(config);
+                config.setLatency(latencyMillis);
 
                 // Create ClientInstance
                 File runDir = new File("bot-run/" + config.getUuid());
@@ -812,8 +825,8 @@ public class VelocityBotManager {
                 botLoopGuards.put(botUUID, new AtomicBoolean(false));
 
                 // Initialize
-                logger.info("Starting bot instance for {} (UUID: {}, Difficulty: {}, Token: {})",
-                        config.getUsername(), botUUID, difficulty.getId(), requestToken);
+                logger.info("Starting bot instance for {} (UUID: {}, Difficulty: {}, Latency: {}ms, Token: {})",
+                        config.getUsername(), botUUID, difficulty.getId(), latencyMillis, requestToken);
 
                 bot.run();
 
@@ -828,7 +841,7 @@ public class VelocityBotManager {
 
                             if (!loopGuard.compareAndSet(false, true)) {
                                 handleBotLoopStall(botUUID, playerUUID, serverName, kitType, difficulty,
-                                        requestToken, retryCount, finalBotUsername);
+                                        requestToken, latencyMillis, retryCount, finalBotUsername);
                                 return;
                             }
                             botLoopStartedAtMillis.put(botUUID, System.currentTimeMillis());
@@ -841,7 +854,7 @@ public class VelocityBotManager {
                                 }
 
                                 if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
-                                        requestToken, retryCount, finalBotUsername)) {
+                                        requestToken, latencyMillis, retryCount, finalBotUsername)) {
                                     return;
                                 }
 
@@ -902,7 +915,8 @@ public class VelocityBotManager {
                                                     timeoutLike ? "read timeout" : "chat crash",
                                                     retryCount + 1);
                                             scheduleBotRecreate(playerUUID, serverName, kitType, difficulty,
-                                                    requestToken, retryCount + 1, BOT_RECREATE_DELAY_MILLIS);
+                                                    requestToken, latencyMillis, retryCount + 1,
+                                                    BOT_RECREATE_DELAY_MILLIS);
                                         } else if (currentDiagnostics != null) {
                                             notifyBotDuelFailed(currentDiagnostics,
                                                     timeoutLike ? "read-timeout" : "chat-crash",
@@ -913,7 +927,7 @@ public class VelocityBotManager {
                                 }
 
                                 if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
-                                        requestToken, retryCount, finalBotUsername)) {
+                                        requestToken, latencyMillis, retryCount, finalBotUsername)) {
                                     return;
                                 }
 
