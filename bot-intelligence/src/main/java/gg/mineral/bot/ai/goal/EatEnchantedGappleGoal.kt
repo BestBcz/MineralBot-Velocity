@@ -155,6 +155,7 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
     override fun onEnd() {
         if (eating) {
             lastEatTick = clientInstance.currentTick
+            clientInstance.fakePlayer.stopUsingItem()
         }
 
         eating = false

@@ -50,6 +50,11 @@ interface ClientPlayer : ClientLivingEntity {
     val isEatingOrDrinking: Boolean
 
     /**
+     * Stops the player's current held-item use locally.
+     */
+    fun stopUsingItem() {}
+
+    /**
      * Gets the player's motion simulator.
      *
      * @return the player's motion simulator
