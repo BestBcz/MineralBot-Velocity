@@ -11,6 +11,8 @@ import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import org.slf4j.Logger;
 
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -90,8 +92,10 @@ public class VelocityBotManager {
             boolean targetBlocking = in.readBoolean();
 
             // Update ClientInstance directly
-            ClientInstance bot = getBot(botUuid);
+            UUID ourBotUuid = resolveToOurUuid(botUuid);
+            ClientInstance bot = getBot(ourBotUuid);
             if (bot != null) {
+                botTargets.put(ourBotUuid, targetUuid);
                 bot.updateFromGuide(
                         bX, bY, bZ, bYaw, bPitch, (float) botHealth, botFood, botSat,
                         targetUuid, tX, tY, tZ, tYaw, tPitch,
@@ -688,9 +692,21 @@ public class VelocityBotManager {
 
             UUID playerUUID = UUID.fromString(playerUUIDStr);
             UUID serverBotUUID = UUID.fromString(botUUIDStr);
+            UUID targetUUID = playerUUID;
+            Set<UUID> friendlyUUIDs = new HashSet<>();
 
-            logger.info("BotDuel started: Player={}, Bot(server)={}, Kit={}, Difficulty={}, Token={}",
-                    playerUUID, serverBotUUID, kitType, difficulty.getId(), requestToken);
+            try {
+                targetUUID = UUID.fromString(in.readUTF());
+                int friendlyCount = Math.max(0, in.readInt());
+                for (int index = 0; index < friendlyCount; index++) {
+                    friendlyUUIDs.add(UUID.fromString(in.readUTF()));
+                }
+            } catch (IllegalStateException ignored) {
+                // Backwards compatibility with practice builds that only sent a 1v1 target.
+            }
+
+            logger.info("BotDuel started: Owner={}, Target={}, Bot(server)={}, Kit={}, Difficulty={}, Token={}, Friendlies={}",
+                    playerUUID, targetUUID, serverBotUUID, kitType, difficulty.getId(), requestToken, friendlyUUIDs);
 
             ClientInstance bot = activeBots.get(serverBotUUID);
             UUID ourBotUUID = serverBotUUID;
@@ -723,10 +739,12 @@ public class VelocityBotManager {
                 diagnostics.markDuelStarted(playerUUID);
             }
 
-            botTargets.put(ourBotUUID, playerUUID);
+            botTargets.put(ourBotUUID, targetUUID);
             kitTypes.put(ourBotUUID, kitType);
             botDifficulties.put(ourBotUUID, difficulty);
             botRequestTokens.put(ourBotUUID, requestToken);
+            bot.getConfiguration().getFriendlyUUIDs().clear();
+            bot.getConfiguration().getFriendlyUUIDs().addAll(friendlyUUIDs);
 
             logger.info("Configuring combat AI for bot {} with kit type {} at difficulty {}", ourBotUUID, kitType,
                     difficulty.getId());
