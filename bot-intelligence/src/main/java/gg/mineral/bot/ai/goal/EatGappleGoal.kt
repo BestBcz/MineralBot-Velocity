@@ -142,6 +142,9 @@ class EatGappleGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstan
     }
 
     override fun onEnd() {
+        if (eating) {
+            clientInstance.fakePlayer.stopUsingItem()
+        }
         eating = false
         unpressButton(MouseButton.Type.RIGHT_CLICK)
         unpressKey(Key.Type.KEY_SPACE)
