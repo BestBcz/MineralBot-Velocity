@@ -126,7 +126,8 @@ enum class BotDifficulty(
     val skin: Skins
         get() = when (this) {
             NOOB -> Skins.MINERAL_GREEN
-            NORMAL, PRO -> Skins.BCZ
+            NORMAL -> Skins.BCZ
+            PRO -> Skins.PRO
         }
 
     fun applyTo(configuration: BotConfiguration) {
