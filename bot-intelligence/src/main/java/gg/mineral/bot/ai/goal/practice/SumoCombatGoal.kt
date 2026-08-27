@@ -81,7 +81,10 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
 
         if (clientInstance.currentTick - lastTargetSwitchTick < 20) {
             val currentTargetState = snapshot.stateFor(target)
-            if (currentTargetState != null && currentTargetState.distance3D <= targetSearchRange) {
+            val guidedTargetUuid = clientInstance.guidedTargetUuid
+            if (currentTargetState != null && currentTargetState.distance3D <= targetSearchRange &&
+                (guidedTargetUuid == null || currentTargetState.uuid == guidedTargetUuid)
+            ) {
                 return
             }
         }

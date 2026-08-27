@@ -83,6 +83,9 @@ open class ClientInstance(
 
     override var latency: Int = 0
 
+    @Volatile
+    override var guidedTargetUuid: UUID? = null
+
     override var currentTick: Int = 0
     private var foregroundGoalName: String? = null
     private var foregroundGoalStartTick = -1
@@ -649,6 +652,8 @@ open class ClientInstance(
     }
 
     private fun applyGuideUpdate(update: GuideUpdate) {
+        guidedTargetUuid = update.targetUuid
+
         val player = this.thePlayer
         if (player != null) {
             player.setHealth(update.bHealth)

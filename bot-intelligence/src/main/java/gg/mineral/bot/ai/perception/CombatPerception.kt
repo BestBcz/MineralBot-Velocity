@@ -345,14 +345,20 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
             buildProjectileState(entity, fakePlayer, tick)?.let(projectiles::add)
         }
 
-        val sortedEnemies = enemies.sortedWith(compareBy<PlayerState> { it.targetScore }.thenBy { it.distance3D })
+        val guidedTargetUuid = clientInstance.guidedTargetUuid
+        val sortedEnemies = enemies.sortedWith(
+            compareBy<PlayerState> { if (it.uuid == guidedTargetUuid) 0 else 1 }
+                .thenBy { it.targetScore }
+                .thenBy { it.distance3D }
+        )
         val sortedProjectiles = projectiles.sortedBy { it.threatScore }
 
         return Snapshot(
             tick = tick,
             self = self,
             enemies = sortedEnemies,
-            projectiles = sortedProjectiles
+            projectiles = sortedProjectiles,
+            guidedTargetUuid = guidedTargetUuid
         )
     }
 
@@ -559,7 +565,8 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         val tick: Int,
         val self: PlayerState,
         val enemies: List<PlayerState>,
-        val projectiles: List<ProjectileState>
+        val projectiles: List<ProjectileState>,
+        val guidedTargetUuid: UUID?
     ) {
         val nearestEnemy: PlayerState?
             get() = enemies.minByOrNull { it.distance3D }
@@ -574,6 +581,11 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         }
 
         fun bestTargetState(currentTarget: ClientPlayer?, range: Double): PlayerState? {
+            val guided = guidedTargetUuid?.let { uuid -> enemies.firstOrNull { it.uuid == uuid } }
+            if (guided != null && guided.distance3D <= range) {
+                return guided
+            }
+
             val current = stateFor(currentTarget)
             if (current != null && current.distance3D <= range) {
                 return current

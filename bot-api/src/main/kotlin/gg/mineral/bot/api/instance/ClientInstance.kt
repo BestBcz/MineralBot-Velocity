@@ -9,6 +9,7 @@ import gg.mineral.bot.api.goal.Goal
 import gg.mineral.bot.api.screen.Screen
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.ScheduledExecutorService
+import java.util.UUID
 
 interface ClientInstance : EventHandler {
     /**
@@ -45,6 +46,10 @@ interface ClientInstance : EventHandler {
      * @return the bot configuration
      */
     val configuration: BotConfiguration
+
+    /** Target currently recommended by an authoritative external combat guide. */
+    val guidedTargetUuid: UUID?
+        get() = null
 
     /**
      * Gets the keyboard.

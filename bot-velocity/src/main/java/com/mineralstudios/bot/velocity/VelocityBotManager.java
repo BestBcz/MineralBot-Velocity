@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -96,6 +97,7 @@ public class VelocityBotManager {
             ClientInstance bot = getBot(ourBotUuid);
             if (bot != null) {
                 botTargets.put(ourBotUuid, targetUuid);
+                bot.setGuidedTargetUuid(targetUuid);
                 bot.updateFromGuide(
                         bX, bY, bZ, bYaw, bPitch, (float) botHealth, botFood, botSat,
                         targetUuid, tX, tY, tZ, tYaw, tPitch,
@@ -133,6 +135,9 @@ public class VelocityBotManager {
 
     // Track server-assigned UUID to our UUID: Server UUID -> Our Bot UUID
     private final Map<UUID, UUID> serverUuidToOurUuid = new ConcurrentHashMap<>();
+
+    // Friend UUIDs sent by the practice server, keyed by our internal bot UUID.
+    private final Map<UUID, Set<UUID>> botDeclaredFriendlyUuids = new ConcurrentHashMap<>();
 
     // Track diagnostics: Bot UUID -> diagnostics snapshot/state
     private final Map<UUID, BotSessionDiagnostics> botDiagnostics = new ConcurrentHashMap<>();
@@ -394,6 +399,51 @@ public class VelocityBotManager {
         return possiblyServerUuid;
     }
 
+    /**
+     * Expands practice-server friend UUIDs to every identity an entity can use
+     * in the bot client: backend UUID, internal bot UUID and offline-mode UUID.
+     * This is rerun whenever another bot finishes its UUID mapping because the
+     * first BotDuelStarted packet can arrive before later teammates are mapped.
+     */
+    private void refreshAllFriendlyUuidMappings() {
+        for (Map.Entry<UUID, Set<UUID>> entry : botDeclaredFriendlyUuids.entrySet()) {
+            UUID ourBotUuid = entry.getKey();
+            ClientInstance bot = activeBots.get(ourBotUuid);
+            if (!isBotUsable(bot)) {
+                continue;
+            }
+
+            Set<UUID> resolvedFriendlies = new HashSet<>();
+            for (UUID declaredUuid : entry.getValue()) {
+                resolvedFriendlies.add(declaredUuid);
+
+                UUID friendlyInternalUuid = resolveToOurUuid(declaredUuid);
+                resolvedFriendlies.add(friendlyInternalUuid);
+
+                ClientInstance friendlyBot = activeBots.get(friendlyInternalUuid);
+                if (friendlyBot == null) {
+                    continue;
+                }
+
+                BotConfiguration friendlyConfiguration = friendlyBot.getConfiguration();
+                resolvedFriendlies.add(friendlyConfiguration.getUuid());
+
+                String friendlyUsername = friendlyConfiguration.getFullUsername();
+                if (friendlyUsername != null && !friendlyUsername.isEmpty()) {
+                    resolvedFriendlies.add(UUID.nameUUIDFromBytes(
+                            ("OfflinePlayer:" + friendlyUsername).getBytes(StandardCharsets.UTF_8)));
+                }
+            }
+
+            resolvedFriendlies.remove(ourBotUuid);
+            resolvedFriendlies.remove(bot.getConfiguration().getUuid());
+
+            bot.getConfiguration().getFriendlyUUIDs().clear();
+            bot.getConfiguration().getFriendlyUUIDs().addAll(resolvedFriendlies);
+            logger.info("Refreshed friendly UUID aliases for bot {}: {}", ourBotUuid, resolvedFriendlies);
+        }
+    }
+
     private UUID findCandidateBotUuid(UUID playerUUID, String kitType, BotDifficulty difficulty, String requestToken) {
         for (Map.Entry<UUID, ClientInstance> entry : activeBots.entrySet()) {
             UUID candidateUuid = entry.getKey();
@@ -520,11 +570,13 @@ public class VelocityBotManager {
         botDifficulties.remove(ourBotUUID);
         botRequestTokens.remove(ourBotUUID);
         botDiagnostics.remove(ourBotUUID);
+        botDeclaredFriendlyUuids.remove(ourBotUUID);
 
         if (serverBotUUID != null) {
             serverUuidToOurUuid.remove(serverBotUUID);
         }
         serverUuidToOurUuid.entrySet().removeIf(entry -> entry.getValue().equals(ourBotUUID));
+        refreshAllFriendlyUuidMappings();
 
         com.velocitypowered.api.scheduler.ScheduledTask task = botTasks.remove(ourBotUUID);
         if (task != null) {
@@ -734,17 +786,22 @@ public class VelocityBotManager {
                 return;
             }
 
+            // Keep this mapping even if both UUIDs currently match. Each new
+            // mapping may complete an earlier teammate's friendly alias set.
+            serverUuidToOurUuid.put(serverBotUUID, ourBotUUID);
+
             BotSessionDiagnostics diagnostics = getDiagnostics(ourBotUUID);
             if (diagnostics != null) {
                 diagnostics.markDuelStarted(playerUUID);
             }
 
             botTargets.put(ourBotUUID, targetUUID);
+            bot.setGuidedTargetUuid(targetUUID);
             kitTypes.put(ourBotUUID, kitType);
             botDifficulties.put(ourBotUUID, difficulty);
             botRequestTokens.put(ourBotUUID, requestToken);
-            bot.getConfiguration().getFriendlyUUIDs().clear();
-            bot.getConfiguration().getFriendlyUUIDs().addAll(friendlyUUIDs);
+            botDeclaredFriendlyUuids.put(ourBotUUID, new HashSet<>(friendlyUUIDs));
+            refreshAllFriendlyUuidMappings();
 
             logger.info("Configuring combat AI for bot {} with kit type {} at difficulty {}", ourBotUUID, kitType,
                     difficulty.getId());
