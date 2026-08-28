@@ -20,7 +20,7 @@ final class BotSessionDiagnostics {
     static final String UPDATE_HEALTH = "UPDATE_HEALTH";
 
     static final long STARTUP_WARNING_AFTER_MILLIS = 3_000L;
-    static final long STARTUP_FAILURE_AFTER_MILLIS = 12_000L;
+    static final long STARTUP_FAILURE_AFTER_MILLIS = 30_000L;
     static final int TARGET_MISSING_TICK_THRESHOLD = 40;
     static final long TARGET_REPAIR_COOLDOWN_MILLIS = 2_000L;
 
@@ -46,6 +46,7 @@ final class BotSessionDiagnostics {
     private final Map<String, Long> lastPacketSeenAtMillis = new ConcurrentHashMap<>();
 
     private volatile boolean duelStarted;
+    private volatile boolean requestAccepted;
     private volatile long duelStartedAtMillis = -1L;
     private volatile String lastDisconnectReason = "";
     private volatile UUID expectedTargetUuid;
@@ -93,6 +94,10 @@ final class BotSessionDiagnostics {
         return duelStarted;
     }
 
+    boolean isRequestAccepted() {
+        return requestAccepted;
+    }
+
     synchronized void markPacket(String packetKey) {
         markPacket(packetKey, Integer.MIN_VALUE, null);
     }
@@ -111,9 +116,14 @@ final class BotSessionDiagnostics {
     }
 
     synchronized void markDuelStarted(UUID targetUuid) {
+        this.requestAccepted = true;
         this.duelStarted = true;
         this.duelStartedAtMillis = System.currentTimeMillis();
         this.expectedTargetUuid = targetUuid;
+    }
+
+    synchronized void markRequestAccepted() {
+        this.requestAccepted = true;
     }
 
     void noteDisconnect(String disconnectReason) {
@@ -165,7 +175,8 @@ final class BotSessionDiagnostics {
     }
 
     synchronized boolean shouldFailStartup(long now) {
-        return !duelStarted
+        return !requestAccepted
+                && !duelStarted
                 && !failureReported
                 && now - createdAtMillis >= STARTUP_FAILURE_AFTER_MILLIS;
     }
@@ -275,6 +286,7 @@ final class BotSessionDiagnostics {
                 + ", botUsername=" + botUsername
                 + ", requestToken=" + requestToken
                 + ", retryCount=" + retryCount
+                + ", requestAccepted=" + requestAccepted
                 + ", duelStarted=" + duelStarted
                 + ", createdAtMillis=" + createdAtMillis
                 + ", duelStartedAtMillis=" + duelStartedAtMillis;

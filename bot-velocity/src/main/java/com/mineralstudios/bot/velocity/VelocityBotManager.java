@@ -16,8 +16,13 @@ import java.util.Set;
 import java.util.UUID;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.io.File;
 
 import gg.mineral.bot.base.client.instance.ClientInstance;
@@ -51,8 +56,10 @@ public class VelocityBotManager {
     private static final String SUB_CHANNEL_BOT_GUIDE = "BotGuide";
     private static final String SUB_CHANNEL_BOT_DUEL_FAILED = "BotDuelFailed";
     private static final String SUB_CHANNEL_BOT_REPAIR_MATCH_ENTITIES = "BotRepairMatchEntities";
-    private static final long BOT_RECREATE_DELAY_MILLIS = 1_200L;
-    private static final long BOT_LOOP_STALL_MILLIS = 5_000L;
+    private static final String SUB_CHANNEL_BOT_REQUEST_ACCEPTED = "BotRequestAccepted";
+    private static final String SUB_CHANNEL_BOT_REQUEST_CANCELLED = "BotRequestCancelled";
+    private static final int MAX_STARTUP_RETRIES = 4;
+    private static final long CANCELLED_TOKEN_RETENTION_MILLIS = 60_000L;
 
     // Track active bots: Bot UUID -> ClientInstance
     private final Map<UUID, ClientInstance> activeBots = new ConcurrentHashMap<>();
@@ -126,12 +133,14 @@ public class VelocityBotManager {
     // different UUID)
     private final Map<String, UUID> botsByUsername = new ConcurrentHashMap<>();
 
-    // Track bot tasks: Bot UUID -> ScheduledTask
-    private final Map<UUID, com.velocitypowered.api.scheduler.ScheduledTask> botTasks = new ConcurrentHashMap<>();
+    // Every bot owns a stable, isolated game-loop thread. A stalled client can no
+    // longer block another bot or be re-entered by Velocity's shared scheduler.
+    private final Map<UUID, ScheduledExecutorService> botExecutors = new ConcurrentHashMap<>();
+    private final Map<UUID, ScheduledFuture<?>> botTasks = new ConcurrentHashMap<>();
+    private final AtomicInteger botThreadSequence = new AtomicInteger();
 
-    // Prevent repeated scheduler ticks from re-entering the same bot loop concurrently.
-    private final Map<UUID, AtomicBoolean> botLoopGuards = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> botLoopStartedAtMillis = new ConcurrentHashMap<>();
+    // A cancellation can overtake a queued create/retry task, so remember it briefly.
+    private final Map<String, Long> cancelledRequestTokens = new ConcurrentHashMap<>();
 
     // Track server-assigned UUID to our UUID: Server UUID -> Our Bot UUID
     private final Map<UUID, UUID> serverUuidToOurUuid = new ConcurrentHashMap<>();
@@ -239,60 +248,44 @@ public class VelocityBotManager {
             int nextRetryCount,
             long delayMillis
     ) {
-        server.getScheduler().buildTask(plugin, () ->
+        server.getScheduler().buildTask(plugin, () -> {
+            if (!isRequestCancelled(requestToken)) {
                 createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
-                        nextRetryCount)
-        ).delay(delayMillis, TimeUnit.MILLISECONDS).schedule();
+                        nextRetryCount);
+            }
+        }).delay(delayMillis, TimeUnit.MILLISECONDS).schedule();
     }
 
-    private void handleBotLoopStall(
-            UUID botUUID,
-            UUID playerUUID,
-            String serverName,
-            String kitType,
-            BotDifficulty difficulty,
-            String requestToken,
-            int latencyMillis,
-            int retryCount,
-            String botUsername
-    ) {
-        Long startedAt = botLoopStartedAtMillis.get(botUUID);
+    private long retryDelayMillis(int retryCount, boolean frequentConnectionKick) {
+        if (frequentConnectionKick) {
+            // Initial connections remain fully parallel. Only throttled retries are
+            // spread far enough apart to avoid a reconnect storm from the same host.
+            return Math.min(4_000L, 1_050L + retryCount * 650L)
+                    + ThreadLocalRandom.current().nextLong(150L, 750L);
+        }
+        long exponentialDelay = Math.min(2_400L, 300L << Math.min(retryCount, 3));
+        return exponentialDelay + ThreadLocalRandom.current().nextLong(100L, 350L);
+    }
+
+    private boolean isRequestCancelled(String requestToken) {
+        if (requestToken == null) {
+            return false;
+        }
+
+        Long expiresAt = cancelledRequestTokens.get(requestToken);
+        if (expiresAt == null) {
+            return false;
+        }
+        if (expiresAt <= System.currentTimeMillis()) {
+            cancelledRequestTokens.remove(requestToken, expiresAt);
+            return false;
+        }
+        return true;
+    }
+
+    private void purgeExpiredCancelledTokens() {
         long now = System.currentTimeMillis();
-        if (startedAt == null || now - startedAt < BOT_LOOP_STALL_MILLIS) {
-            return;
-        }
-
-        AtomicBoolean guard = botLoopGuards.remove(botUUID);
-        if (guard == null) {
-            return;
-        }
-
-        BotSessionDiagnostics diagnostics = getDiagnostics(botUUID);
-        boolean duelStarted = diagnostics != null && diagnostics.isDuelStarted();
-        String detail = "Bot game loop did not return for " + (now - startedAt) + "ms.";
-        if (diagnostics != null) {
-            diagnostics.noteDisconnect("game-loop-stall");
-        }
-
-        logger.error("Bot {} game loop stalled for {}ms. duelStarted={}",
-                botUsername, now - startedAt, duelStarted);
-        if (duelStarted && diagnostics != null) {
-            logger.warn("Bot {} stalled after duel start; not recreating into lobby.", botUsername);
-            notifyBotDuelFailed(diagnostics, "game-loop-stall", detail);
-            cleanupBot(botUUID, null, true);
-            return;
-        }
-
-        cleanupBot(botUUID, null, true);
-
-        if (!duelStarted && retryCount < 3) {
-            logger.warn("Bot {} stalled before duel start, recreating (retry #{})",
-                    botUsername, retryCount + 1);
-            scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
-                    retryCount + 1, BOT_RECREATE_DELAY_MILLIS);
-        } else if (diagnostics != null) {
-            notifyBotDuelFailed(diagnostics, "game-loop-stall", detail);
-        }
+        cancelledRequestTokens.entrySet().removeIf(entry -> entry.getValue() <= now);
     }
 
     private boolean runStartupWatchdog(UUID botUuid) {
@@ -445,6 +438,7 @@ public class VelocityBotManager {
     }
 
     private UUID findCandidateBotUuid(UUID playerUUID, String kitType, BotDifficulty difficulty, String requestToken) {
+        UUID legacyCandidate = null;
         for (Map.Entry<UUID, ClientInstance> entry : activeBots.entrySet()) {
             UUID candidateUuid = entry.getKey();
             ClientInstance candidate = entry.getValue();
@@ -464,13 +458,13 @@ public class VelocityBotManager {
                 return candidateUuid;
             }
 
-            if (candidateKit != null
+            if ((requestToken == null || requestToken.isEmpty()) && candidateKit != null
                     && candidateKit.equalsIgnoreCase(kitType)
                     && candidateDifficulty == difficulty) {
-                return candidateUuid;
+                legacyCandidate = candidateUuid;
             }
         }
-        return null;
+        return legacyCandidate;
     }
 
     private UUID findUsableBotByKit(String kitType, BotDifficulty difficulty) {
@@ -560,7 +554,10 @@ public class VelocityBotManager {
 
     private boolean isFrequentConnectionKick(String text) {
         return text != null && (text.contains("\u4f60\u7684\u94fe\u63a5\u6b21\u6570\u8fc7\u4e8e\u9891\u7e41")
-                || text.contains("\u7a0d\u540e\u518d\u8bd5"));
+                || text.contains("\u7a0d\u540e\u518d\u8bd5")
+                || text.toLowerCase(Locale.ROOT).contains("connection throttled")
+                || text.toLowerCase(Locale.ROOT).contains("logging in too fast")
+                || text.toLowerCase(Locale.ROOT).contains("too many connections"));
     }
 
     private void cleanupBot(UUID ourBotUUID, UUID serverBotUUID, boolean shutdownInstance) {
@@ -578,13 +575,15 @@ public class VelocityBotManager {
         serverUuidToOurUuid.entrySet().removeIf(entry -> entry.getValue().equals(ourBotUUID));
         refreshAllFriendlyUuidMappings();
 
-        com.velocitypowered.api.scheduler.ScheduledTask task = botTasks.remove(ourBotUUID);
+        ScheduledFuture<?> task = botTasks.remove(ourBotUUID);
         if (task != null) {
-            task.cancel();
+            task.cancel(false);
         }
 
-        botLoopGuards.remove(ourBotUUID);
-        botLoopStartedAtMillis.remove(ourBotUUID);
+        ScheduledExecutorService executor = botExecutors.remove(ourBotUUID);
+        if (executor != null) {
+            executor.shutdown();
+        }
 
         String username = findUsername(ourBotUUID);
         if (username != null) {
@@ -636,6 +635,7 @@ public class VelocityBotManager {
             diagnostics.noteDisconnect(disconnectText);
         }
         boolean duelStarted = diagnostics != null && diagnostics.isDuelStarted();
+        boolean requestAccepted = diagnostics != null && diagnostics.isRequestAccepted();
 
         logger.warn("Bot {} disconnected: {}", botUsername, disconnectText);
         boolean frequentKick = isFrequentConnectionKick(disconnectText);
@@ -643,21 +643,21 @@ public class VelocityBotManager {
 
         cleanupBot(ourBotUUID, null, true);
 
-        if (!duelStarted && frequentKick && retryCount < 3) {
-            logger.warn("Bot {} was kicked for frequent connection. Retrying (#{})", botUsername, retryCount + 1);
+        if (!duelStarted && !requestAccepted && retryCount < MAX_STARTUP_RETRIES
+                && !isRequestCancelled(requestToken)) {
+            logger.warn("Bot {} disconnected before backend acceptance, recreating (retry #{}, reason={})",
+                    botUsername, retryCount + 1, disconnectText);
             scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
-                    retryCount + 1, 1_000L);
-        } else if (!duelStarted && timeoutLike && retryCount < 3) {
-            logger.warn("Bot {} hit read timeout, recreating (retry #{})", botUsername, retryCount + 1);
-            scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
-                    retryCount + 1, BOT_RECREATE_DELAY_MILLIS);
+                    retryCount + 1, retryDelayMillis(retryCount, frequentKick));
         } else if (diagnostics != null) {
             String reason = frequentKick ? "frequent-connection-kick" : timeoutLike ? "read-timeout" : "bot-disconnected";
-            if (duelStarted) {
-                logger.warn("Bot {} disconnected after duel start; not recreating into lobby. reason={}",
+            if (duelStarted || requestAccepted) {
+                logger.warn("Bot {} disconnected after backend acceptance; backend will handle replacement/cleanup. reason={}",
                         botUsername, reason);
             }
-            notifyBotDuelFailed(diagnostics, reason, disconnectText);
+            if (!requestAccepted && !isRequestCancelled(requestToken)) {
+                notifyBotDuelFailed(diagnostics, reason, disconnectText);
+            }
         }
 
         return true;
@@ -694,6 +694,12 @@ public class VelocityBotManager {
             case SUB_CHANNEL_BOT_DUEL_STARTED:
                 handleBotDuelStarted(in);
                 break;
+            case SUB_CHANNEL_BOT_REQUEST_ACCEPTED:
+                handleBotRequestAccepted(in);
+                break;
+            case SUB_CHANNEL_BOT_REQUEST_CANCELLED:
+                handleBotRequestCancelled(in);
+                break;
             case SUB_CHANNEL_BOT_DISCONNECT:
                 handleBotDisconnect(in);
                 break;
@@ -725,6 +731,11 @@ public class VelocityBotManager {
 
             UUID playerUUID = UUID.fromString(playerUUIDStr);
 
+            if (isRequestCancelled(requestToken)) {
+                logger.info("Ignoring cancelled BotDuel request. Player={}, Token={}", playerUUID, requestToken);
+                return;
+            }
+
             logger.info("Received BotDuel request: Player={}, Server={}, Kit={}, Difficulty={}, Latency={}ms, Token={}",
                     playerUUID, serverName, kitType, difficulty.getId(), latencyMillis, requestToken);
 
@@ -732,6 +743,69 @@ public class VelocityBotManager {
         } catch (Exception e) {
             logger.error("Failed to parse BotDuel message", e);
         }
+    }
+
+    private void handleBotRequestAccepted(ByteArrayDataInput in) {
+        try {
+            UUID serverBotUuid = UUID.fromString(in.readUTF());
+            String requestToken = in.readUTF();
+
+            UUID ourBotUuid = requestToken == null || requestToken.isEmpty()
+                    ? resolveToOurUuid(serverBotUuid)
+                    : findBotByRequestToken(requestToken);
+            if (ourBotUuid != null && !activeBots.containsKey(ourBotUuid)) {
+                ourBotUuid = null;
+            }
+            if (ourBotUuid == null) {
+                logger.warn("Could not acknowledge bot request. Server UUID={}, Token={}", serverBotUuid, requestToken);
+                return;
+            }
+
+            serverUuidToOurUuid.put(serverBotUuid, ourBotUuid);
+            BotSessionDiagnostics diagnostics = getDiagnostics(ourBotUuid);
+            if (diagnostics != null) {
+                diagnostics.markRequestAccepted();
+            }
+            refreshAllFriendlyUuidMappings();
+            logger.info("Backend accepted bot request. ourUUID={}, serverUUID={}, token={}",
+                    ourBotUuid, serverBotUuid, requestToken);
+        } catch (Exception e) {
+            logger.error("Failed to parse BotRequestAccepted message", e);
+        }
+    }
+
+    private void handleBotRequestCancelled(ByteArrayDataInput in) {
+        try {
+            String requestToken = in.readUTF();
+            purgeExpiredCancelledTokens();
+            cancelledRequestTokens.put(requestToken,
+                    System.currentTimeMillis() + CANCELLED_TOKEN_RETENTION_MILLIS);
+
+            Set<UUID> matchingBots = new HashSet<>();
+            for (Map.Entry<UUID, String> entry : botRequestTokens.entrySet()) {
+                if (requestToken.equalsIgnoreCase(entry.getValue())) {
+                    matchingBots.add(entry.getKey());
+                }
+            }
+            for (UUID botUuid : matchingBots) {
+                cleanupBot(botUuid, null, true);
+            }
+            logger.info("Cancelled bot request token {} (active bots stopped={})", requestToken, matchingBots.size());
+        } catch (Exception e) {
+            logger.error("Failed to parse BotRequestCancelled message", e);
+        }
+    }
+
+    private UUID findBotByRequestToken(String requestToken) {
+        if (requestToken == null) {
+            return null;
+        }
+        for (Map.Entry<UUID, String> entry : botRequestTokens.entrySet()) {
+            if (requestToken.equalsIgnoreCase(entry.getValue()) && activeBots.containsKey(entry.getKey())) {
+                return entry.getKey();
+            }
+        }
+        return null;
     }
 
     private void handleBotDuelStarted(ByteArrayDataInput in) {
@@ -760,10 +834,13 @@ public class VelocityBotManager {
             logger.info("BotDuel started: Owner={}, Target={}, Bot(server)={}, Kit={}, Difficulty={}, Token={}, Friendlies={}",
                     playerUUID, targetUUID, serverBotUUID, kitType, difficulty.getId(), requestToken, friendlyUUIDs);
 
-            ClientInstance bot = activeBots.get(serverBotUUID);
-            UUID ourBotUUID = serverBotUUID;
+            boolean hasRequestToken = requestToken != null && !requestToken.isEmpty();
+            UUID ourBotUUID = hasRequestToken
+                    ? findBotByRequestToken(requestToken)
+                    : resolveToOurUuid(serverBotUUID);
+            ClientInstance bot = ourBotUUID == null ? null : activeBots.get(ourBotUUID);
 
-            if (!isBotUsable(bot)) {
+            if (!hasRequestToken && !isBotUsable(bot)) {
                 logger.info("Bot not found by server UUID, searching by player UUID, difficulty, and request token...");
                 UUID candidateUuid = findCandidateBotUuid(playerUUID, kitType, difficulty, requestToken);
                 if (candidateUuid == null) {
@@ -839,39 +916,50 @@ public class VelocityBotManager {
             int latencyMillis,
             int retryCount
     ) {
-        server.getScheduler().buildTask(plugin, () -> {
-            UUID botUUID = UUID.randomUUID();
-            String botUsername = generateUniqueBotUsername(kitType, requestToken);
-            BotSessionDiagnostics diagnostics =
-                    new BotSessionDiagnostics(playerUUID, botUUID, botUsername, requestToken, retryCount);
+        if (isRequestCancelled(requestToken)) {
+            return;
+        }
 
+        UUID botUUID = UUID.randomUUID();
+        String botUsername = generateUniqueBotUsername(requestToken);
+        BotSessionDiagnostics diagnostics =
+                new BotSessionDiagnostics(playerUUID, botUUID, botUsername, requestToken, retryCount);
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable,
+                    "MineralBot-" + botThreadSequence.incrementAndGet() + "-" + botUsername);
+            thread.setDaemon(true);
+            return thread;
+        };
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(threadFactory);
+        botExecutors.put(botUUID, executor);
+
+        executor.execute(() -> {
             try {
-                // Get Server Info
-                var serverInfo = server.getServer(serverName).orElse(null);
-                if (serverInfo == null) {
-                    logger.error("Server {} not found", serverName);
-                    notifyBotDuelFailed(diagnostics, "server-not-found",
-                            "Backend server " + serverName + " is not registered on the proxy.");
+                if (isRequestCancelled(requestToken)) {
+                    cleanupBot(botUUID, null, false);
                     return;
                 }
 
-                // Configure Bot
-                BotConfiguration config = new BotConfiguration();
-
-                if (retryCount > 0) {
-                    logger.info("Retrying with new bot name: {} (Retry #{})", botUsername, retryCount);
+                if (server.getServer(serverName).isEmpty()) {
+                    logger.error("Server {} not found", serverName);
+                    notifyBotDuelFailed(diagnostics, "server-not-found",
+                            "Backend server " + serverName + " is not registered on the proxy.");
+                    cleanupBot(botUUID, null, false);
+                    return;
                 }
 
+                BotConfiguration config = new BotConfiguration();
+                if (retryCount > 0) {
+                    logger.info("Retrying bot {} (retry #{})", botUsername, retryCount);
+                }
                 config.setUuid(botUUID);
                 config.setUsername(botUsername);
                 config.setDebug(false);
                 difficulty.applyTo(config);
                 config.setLatency(latencyMillis);
 
-                // Create ClientInstance
                 File runDir = new File("bot-run/" + config.getUuid());
                 runDir.mkdirs();
-
                 ClientInstance bot = new ClientInstance(
                         config,
                         800, 600, false, false,
@@ -885,11 +973,8 @@ public class VelocityBotManager {
 
                 bot.setPacketDiagnosticsListener((packetKey, entityId, entityUuid) ->
                         recordBotPacket(botUUID, packetKey, entityId, entityUuid));
-
-                // Set Connection Info - connect to proxy
                 bot.setServer(botConnectHost, botConnectPort);
 
-                // Track the bot and kit type
                 activeBots.put(botUUID, bot);
                 botTargets.put(botUUID, playerUUID);
                 kitTypes.put(botUUID, kitType);
@@ -897,143 +982,104 @@ public class VelocityBotManager {
                 botRequestTokens.put(botUUID, requestToken);
                 botDiagnostics.put(botUUID, diagnostics);
                 botsByUsername.put(config.getUsername(), botUUID);
-                botLoopGuards.put(botUUID, new AtomicBoolean(false));
 
-                // Initialize
-                logger.info("Starting bot instance for {} (UUID: {}, Difficulty: {}, Latency: {}ms, Token: {})",
+                if (isRequestCancelled(requestToken)) {
+                    cleanupBot(botUUID, null, true);
+                    return;
+                }
+
+                logger.info("Starting isolated bot instance for {} (UUID: {}, Difficulty: {}, Latency: {}ms, Token: {})",
                         config.getUsername(), botUUID, difficulty.getId(), latencyMillis, requestToken);
-
                 bot.run();
 
-                // Schedule Game Loop
-                final String finalBotUsername = config.getUsername();
-                final AtomicBoolean loopGuard = botLoopGuards.get(botUUID);
-                com.velocitypowered.api.scheduler.ScheduledTask loopTask = server.getScheduler()
-                        .buildTask(plugin, () -> {
-                            if (loopGuard == null) {
-                                return;
-                            }
-
-                            if (!loopGuard.compareAndSet(false, true)) {
-                                handleBotLoopStall(botUUID, playerUUID, serverName, kitType, difficulty,
-                                        requestToken, latencyMillis, retryCount, finalBotUsername);
-                                return;
-                            }
-                            botLoopStartedAtMillis.put(botUUID, System.currentTimeMillis());
-
-                            try {
-                                if (!bot.isRunning()) {
-                                    cleanupBot(botUUID, null, false);
-                                    logger.info("Bot task self-cancelled for {}", botUUID);
-                                    return;
-                                }
-
-                                if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
-                                        requestToken, latencyMillis, retryCount, finalBotUsername)) {
-                                    return;
-                                }
-
-                                if (runStartupWatchdog(botUUID)) {
-                                    return;
-                                }
-
-                                try {
-                                    bot.runGameLoop();
-                                } catch (Exception e) {
-                                    logger.error("Error in bot game loop", e);
-
-                                    String message = e.toString();
-                                    boolean timeoutLike = message != null && message.contains("ReadTimeoutException");
-                                    if (!timeoutLike && e.getCause() != null) {
-                                        String causeMsg = e.getCause().toString();
-                                        timeoutLike = causeMsg != null && causeMsg.contains("ReadTimeoutException");
-                                    }
-
-                                    boolean chatCrash = false;
-                                    for (StackTraceElement element : e.getStackTrace()) {
-                                        if ("net.minecraft.client.gui.GuiNewChat".equals(element.getClassName())) {
-                                            chatCrash = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!chatCrash && e.getCause() != null) {
-                                        for (StackTraceElement element : e.getCause().getStackTrace()) {
-                                            if ("net.minecraft.client.gui.GuiNewChat".equals(element.getClassName())) {
-                                                chatCrash = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-
-                                    if (timeoutLike || chatCrash) {
-                                        BotSessionDiagnostics currentDiagnostics = getDiagnostics(botUUID);
-                                        if (currentDiagnostics != null) {
-                                            currentDiagnostics.noteDisconnect(e.toString());
-                                        }
-                                        boolean duelStarted = currentDiagnostics != null
-                                                && currentDiagnostics.isDuelStarted();
-                                        if (duelStarted && currentDiagnostics != null) {
-                                            logger.warn("Bot {} hit {} after duel start; not recreating into lobby.",
-                                                    finalBotUsername,
-                                                    timeoutLike ? "read timeout" : "chat crash");
-                                            notifyBotDuelFailed(currentDiagnostics,
-                                                    timeoutLike ? "read-timeout" : "chat-crash",
-                                                    e.toString());
-                                            cleanupBot(botUUID, null, true);
-                                            return;
-                                        }
-
-                                        cleanupBot(botUUID, null, true);
-                                        if (!duelStarted && retryCount < 3) {
-                                            logger.warn("Bot {} hit {}, recreating (retry #{})",
-                                                    finalBotUsername,
-                                                    timeoutLike ? "read timeout" : "chat crash",
-                                                    retryCount + 1);
-                                            scheduleBotRecreate(playerUUID, serverName, kitType, difficulty,
-                                                    requestToken, latencyMillis, retryCount + 1,
-                                                    BOT_RECREATE_DELAY_MILLIS);
-                                        } else if (currentDiagnostics != null) {
-                                            notifyBotDuelFailed(currentDiagnostics,
-                                                    timeoutLike ? "read-timeout" : "chat-crash",
-                                                    e.toString());
-                                        }
-                                        return;
-                                    }
-                                }
-
-                                if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
-                                        requestToken, latencyMillis, retryCount, finalBotUsername)) {
-                                    return;
-                                }
-
-                                runTargetWatchdog(botUUID, bot);
-                            } finally {
-                                botLoopStartedAtMillis.remove(botUUID);
-                                loopGuard.set(false);
-                            }
-                        }).repeat(50, TimeUnit.MILLISECONDS).schedule();
+                ScheduledFuture<?> loopTask = executor.scheduleWithFixedDelay(
+                        () -> runBotGameLoop(botUUID, bot, playerUUID, serverName, kitType, difficulty,
+                                requestToken, latencyMillis, retryCount, botUsername),
+                        10L, 50L, TimeUnit.MILLISECONDS);
                 botTasks.put(botUUID, loopTask);
-
             } catch (Exception e) {
-                logger.error("Failed to start bot", e);
-                notifyBotDuelFailed(diagnostics, "create-failed", e.toString());
+                logger.error("Failed to start bot {}", botUsername, e);
                 cleanupBot(botUUID, null, true);
+                if (isRequestCancelled(requestToken)) {
+                    return;
+                }
+                if (retryCount < MAX_STARTUP_RETRIES) {
+                    scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
+                            retryCount + 1, retryDelayMillis(retryCount, false));
+                } else {
+                    notifyBotDuelFailed(diagnostics, "create-failed", e.toString());
+                }
             }
-        }).schedule();
+        });
     }
 
-    private String generateUniqueBotUsername(String kitType, String requestToken) {
-        String sanitizedKit = kitType == null ? "Bot" : kitType.replaceAll("[^A-Za-z0-9]", "");
-        if (sanitizedKit.isEmpty()) {
-            sanitizedKit = "Bot";
+    private void runBotGameLoop(
+            UUID botUUID,
+            ClientInstance bot,
+            UUID playerUUID,
+            String serverName,
+            String kitType,
+            BotDifficulty difficulty,
+            String requestToken,
+            int latencyMillis,
+            int retryCount,
+            String botUsername
+    ) {
+        if (isRequestCancelled(requestToken)) {
+            cleanupBot(botUUID, null, true);
+            return;
         }
 
+        if (!bot.isRunning()) {
+            BotSessionDiagnostics diagnostics = getDiagnostics(botUUID);
+            boolean accepted = diagnostics != null && diagnostics.isRequestAccepted();
+            cleanupBot(botUUID, null, false);
+            if (!accepted && retryCount < MAX_STARTUP_RETRIES) {
+                scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
+                        retryCount + 1, retryDelayMillis(retryCount, false));
+            } else if (!accepted && diagnostics != null && !isRequestCancelled(requestToken)) {
+                notifyBotDuelFailed(diagnostics, "bot-stopped", "Bot instance stopped before backend acceptance.");
+            }
+            return;
+        }
+
+        if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
+                requestToken, latencyMillis, retryCount, botUsername)) {
+            return;
+        }
+        if (runStartupWatchdog(botUUID)) {
+            return;
+        }
+
+        try {
+            bot.runGameLoop();
+        } catch (Exception e) {
+            BotSessionDiagnostics diagnostics = getDiagnostics(botUUID);
+            if (diagnostics != null) {
+                diagnostics.noteDisconnect(e.toString());
+            }
+            boolean accepted = diagnostics != null && diagnostics.isRequestAccepted();
+            logger.error("Bot {} game loop failed; accepted={}", botUsername, accepted, e);
+            cleanupBot(botUUID, null, true);
+            if (!accepted && retryCount < MAX_STARTUP_RETRIES && !isRequestCancelled(requestToken)) {
+                scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
+                        retryCount + 1, retryDelayMillis(retryCount, false));
+            } else if (!accepted && diagnostics != null && !isRequestCancelled(requestToken)) {
+                notifyBotDuelFailed(diagnostics, "game-loop-failed", e.toString());
+            }
+            return;
+        }
+
+        if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
+                requestToken, latencyMillis, retryCount, botUsername)) {
+            return;
+        }
+        runTargetWatchdog(botUUID, bot);
+    }
+
+    private String generateUniqueBotUsername(String requestToken) {
         String token = requestToken == null ? "BOT0" : requestToken.toUpperCase(Locale.ROOT);
-        int maxPrefixLength = Math.max(1, 16 - token.length());
-        String prefix = sanitizedKit.length() > maxPrefixLength
-                ? sanitizedKit.substring(0, maxPrefixLength)
-                : sanitizedKit;
-        return prefix + token;
+        return "_" + token;
     }
 
     @Subscribe
