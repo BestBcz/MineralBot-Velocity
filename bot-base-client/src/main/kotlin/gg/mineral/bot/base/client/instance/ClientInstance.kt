@@ -80,6 +80,7 @@ open class ClientInstance(
     private val guideTargetEntityIds = mutableMapOf<UUID, Int>()
     private val pendingGuideUpdate = AtomicReference<GuideUpdate?>()
     var packetDiagnosticsListener: PacketDiagnosticsListener? = null
+    var timingDiagnosticsListener: TimingDiagnosticsListener? = null
 
     override var latency: Int = 0
 
@@ -141,6 +142,16 @@ open class ClientInstance(
     @JvmOverloads
     fun recordClientboundPacket(packetKey: String, entityId: Int = Int.MIN_VALUE, entityUuid: UUID? = null) {
         packetDiagnosticsListener?.onClientboundPacket(packetKey, entityId, entityUuid)
+    }
+
+    fun recordTimingEvent(
+        event: String,
+        queuedNanos: Long,
+        velocityX: Double,
+        velocityY: Double,
+        velocityZ: Double
+    ) {
+        timingDiagnosticsListener?.onTimingEvent(event, queuedNanos, velocityX, velocityY, velocityZ)
     }
 
     /**

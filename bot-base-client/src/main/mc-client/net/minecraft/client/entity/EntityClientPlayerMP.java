@@ -3,6 +3,7 @@ package net.minecraft.client.entity;
 import gg.mineral.bot.api.entity.living.player.ClientPlayerMP;
 import gg.mineral.bot.api.entity.living.player.FakePlayer;
 import gg.mineral.bot.api.instance.ClientInstance;
+import gg.mineral.bot.base.client.combat.VelocityInputRecovery;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.audio.MovingSoundMinecartRiding;
 import net.minecraft.client.audio.SoundHandler;
@@ -57,12 +58,7 @@ public class EntityClientPlayerMP extends EntityPlayerSP implements FakePlayer {
      */
     private boolean hasSetHealth;
     private String field_142022_ce;
-    private int velocityImpulseInputTicks;
-    private int consecutiveVelocityImpulses;
-    private int lastVelocityImpulseTick = -1000;
-    private static final int VELOCITY_INPUT_RECOVERY_TICKS = 2;
-    private static final int VELOCITY_TRADE_WINDOW_TICKS = 20;
-    private static final int MAX_TRADE_INPUT_RECOVERY_IMPULSES = 2;
+    private final VelocityInputRecovery velocityInputRecovery = new VelocityInputRecovery();
     public EntityClientPlayerMP(Minecraft p_i45064_1_, World p_i45064_2_, Session p_i45064_3_,
             NetHandlerPlayClient p_i45064_4_, StatFileWriter p_i45064_5_) {
         super(p_i45064_1_, p_i45064_2_, p_i45064_3_, 0);
@@ -71,19 +67,12 @@ public class EntityClientPlayerMP extends EntityPlayerSP implements FakePlayer {
     }
 
     public void markVelocityImpulse(double velocityX, double velocityY, double velocityZ) {
-        if (velocityX * velocityX + velocityY * velocityY + velocityZ * velocityZ > 1.0E-4D) {
-            if (this.ticksExisted - this.lastVelocityImpulseTick <= VELOCITY_TRADE_WINDOW_TICKS) {
-                ++this.consecutiveVelocityImpulses;
-            } else {
-                this.consecutiveVelocityImpulses = 1;
-            }
-
-            this.lastVelocityImpulseTick = this.ticksExisted;
-            this.velocityImpulseInputTicks =
-                    this.consecutiveVelocityImpulses <= MAX_TRADE_INPUT_RECOVERY_IMPULSES
-                            ? VELOCITY_INPUT_RECOVERY_TICKS
-                            : 0;
-        }
+        this.velocityInputRecovery.onVelocityImpulse(
+                this.isVelocityInputRecoveryEnabled(),
+                this.ticksExisted,
+                velocityX,
+                velocityY,
+                velocityZ);
     }
 
     /**
@@ -116,13 +105,16 @@ public class EntityClientPlayerMP extends EntityPlayerSP implements FakePlayer {
     public void updateEntityActionState() {
         super.updateEntityActionState();
 
-        if (this.velocityImpulseInputTicks <= 0)
-            return;
+        float inputScale = this.velocityInputRecovery.consumeInputScale(this.isVelocityInputRecoveryEnabled());
+        if (inputScale != 1.0F) {
+            this.moveStrafing *= inputScale;
+            this.moveForward *= inputScale;
+        }
+    }
 
-        float inputScale = this.velocityImpulseInputTicks > 1 ? 0.65F : 0.85F;
-        this.moveStrafing *= inputScale;
-        this.moveForward *= inputScale;
-        --this.velocityImpulseInputTicks;
+    private boolean isVelocityInputRecoveryEnabled() {
+        return this.mc instanceof ClientInstance clientInstance
+                && clientInstance.getConfiguration().getVelocityInputRecoveryEnabled();
     }
 
     /**

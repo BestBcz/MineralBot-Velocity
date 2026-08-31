@@ -22,6 +22,8 @@ import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.GenericFutureListener;
 import lombok.Getter;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.network.NetHandlerPlayClient;
+import net.minecraft.network.play.server.S12PacketEntityVelocity;
 import net.minecraft.util.*;
 import org.apache.commons.lang3.Validate;
 import org.apache.logging.log4j.LogManager;
@@ -200,6 +202,11 @@ public class NetworkManager extends SimpleChannelInboundHandler<Packet> {
             if (p_channelRead0_2_.hasPriority()) {
                 p_channelRead0_2_.processPacket(this.netHandler);
             } else {
+                if (p_channelRead0_2_ instanceof S12PacketEntityVelocity velocityPacket
+                        && this.netHandler instanceof NetHandlerPlayClient playHandler
+                        && playHandler.isTimingDiagnosticsEnabled()) {
+                    velocityPacket.markQueuedAtNanos(System.nanoTime());
+                }
                 this.receivedPacketsQueue.add(p_channelRead0_2_);
             }
         }

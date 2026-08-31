@@ -153,6 +153,11 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         }
     }
 
+    public boolean isTimingDiagnosticsEnabled() {
+        return this.gameController instanceof ClientInstance instance
+                && instance.getTimingDiagnosticsListener() != null;
+    }
+
     public NetHandlerPlayClient(Minecraft p_i45061_1_, GuiScreen p_i45061_2_, NetworkManager p_i45061_3_) {
         this.gameController = p_i45061_1_;
         this.guiScreenServer = p_i45061_2_;
@@ -375,6 +380,16 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
             var2.setVelocity(velocityX, velocityY, velocityZ);
             if (var2 == this.gameController.thePlayer) {
                 this.gameController.thePlayer.markVelocityImpulse(velocityX, velocityY, velocityZ);
+                if (this.gameController instanceof ClientInstance instance) {
+                    long queuedAtNanos = p_147244_1_.getQueuedAtNanos();
+                    long queuedNanos = queuedAtNanos <= 0L ? 0L : System.nanoTime() - queuedAtNanos;
+                    instance.recordTimingEvent(
+                            "S12_PROCESSED",
+                            queuedNanos,
+                            velocityX,
+                            velocityY,
+                            velocityZ);
+                }
             }
             recordClientboundPacket("ENTITY_VELOCITY", var2);
         }

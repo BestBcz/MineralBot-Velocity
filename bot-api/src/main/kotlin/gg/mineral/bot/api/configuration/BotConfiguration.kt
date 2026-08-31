@@ -44,7 +44,8 @@ data class BotConfiguration(
     var debug: Boolean = false,
     var disableEntityCollisions: Boolean = true,
     var friendlyUUIDs: MutableSet<UUID> = BotAPI.INSTANCE.collections().newSet(),
-    var potAccuracy: Double = 0.5
+    var potAccuracy: Double = 0.5,
+    var velocityInputRecoveryEnabled: Boolean = false
 ) {
     val fullUsername: String
         get() = "$usernamePrefix$username$usernameSuffix"
@@ -97,6 +98,7 @@ data class BotConfiguration(
             private var disableEntityCollisions: Boolean = true
             private var friendlyUUIDs: MutableSet<UUID> = BotAPI.INSTANCE.collections().newSet()
             private var potAccuracy: Double = 0.5
+            private var velocityInputRecoveryEnabled: Boolean = false
 
             fun username(username: String) = apply { this.username = username }
             fun usernamePrefix(usernamePrefix: String) = apply { this.usernamePrefix = usernamePrefix }
@@ -159,6 +161,8 @@ data class BotConfiguration(
             fun debug(debug: Boolean) = apply { this.debug = debug }
             fun friendlyUUIDs(friendlyUUIDs: MutableSet<UUID>) = apply { this.friendlyUUIDs = friendlyUUIDs }
             fun potAccuracy(potAccuracy: Double) = apply { this.potAccuracy = potAccuracy }
+            fun velocityInputRecoveryEnabled(enabled: Boolean) =
+                apply { this.velocityInputRecoveryEnabled = enabled }
             fun predictionHorizon(predictionHorizon: Int) = apply { this.predictionHorizon = predictionHorizon }
             fun disableEntityCollisions(disableEntityCollisions: Boolean) =
                 apply { this.disableEntityCollisions = disableEntityCollisions }
@@ -202,7 +206,8 @@ data class BotConfiguration(
                 debug,
                 disableEntityCollisions,
                 friendlyUUIDs,
-                potAccuracy
+                potAccuracy,
+                velocityInputRecoveryEnabled
             )
         }
     }

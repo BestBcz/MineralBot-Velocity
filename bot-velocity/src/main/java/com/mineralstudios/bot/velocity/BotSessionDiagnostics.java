@@ -3,9 +3,11 @@ package com.mineralstudios.bot.velocity;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 final class BotSessionDiagnostics {
 
@@ -23,6 +25,10 @@ final class BotSessionDiagnostics {
     static final long STARTUP_FAILURE_AFTER_MILLIS = 30_000L;
     static final int TARGET_MISSING_TICK_THRESHOLD = 40;
     static final long TARGET_REPAIR_COOLDOWN_MILLIS = 2_000L;
+    private static final long TIMING_SUMMARY_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(10L);
+    private static final long TIMING_ANOMALY_COOLDOWN_NANOS = TimeUnit.SECONDS.toNanos(2L);
+    private static final long SLOW_LOOP_NANOS = TimeUnit.MILLISECONDS.toNanos(20L);
+    private static final long SLOW_S12_QUEUE_NANOS = TimeUnit.MILLISECONDS.toNanos(75L);
 
     private static final List<String> PACKET_KEYS = Arrays.asList(
             PLAYER_POS_LOOK,
@@ -61,6 +67,26 @@ final class BotSessionDiagnostics {
     private volatile boolean failureReported;
     private volatile boolean targetWarningLoggedForCurrentMissingEpisode;
     private volatile boolean repairRequestedForCurrentMissingEpisode;
+
+    private long timingWindowStartedAtNanos;
+    private long previousPumpStartedAtNanos;
+    private long lastTimingAnomalyAtNanos;
+    private long pumpCount;
+    private long pumpIntervalCount;
+    private long totalPumpIntervalNanos;
+    private long maxPumpIntervalNanos;
+    private long totalLoopDurationNanos;
+    private long maxLoopDurationNanos;
+    private long advancedTickCount;
+    private long catchUpTickCount;
+    private long multiTickPumpCount;
+    private long s12Count;
+    private long totalS12QueueNanos;
+    private long maxS12QueueNanos;
+    private double lastVelocityX;
+    private double lastVelocityY;
+    private double lastVelocityZ;
+    private String pendingTimingAnomaly;
 
     BotSessionDiagnostics(UUID playerUuid, UUID ourBotUuid, String botUsername, String requestToken, int retryCount) {
         this.playerUuid = playerUuid;
@@ -130,6 +156,86 @@ final class BotSessionDiagnostics {
         this.lastDisconnectReason = disconnectReason == null ? "" : disconnectReason;
     }
 
+    synchronized void recordTimingEvent(
+            String event,
+            long queuedNanos,
+            double velocityX,
+            double velocityY,
+            double velocityZ
+    ) {
+        if (!"S12_PROCESSED".equals(event)) {
+            return;
+        }
+
+        ++s12Count;
+        totalS12QueueNanos += Math.max(0L, queuedNanos);
+        maxS12QueueNanos = Math.max(maxS12QueueNanos, queuedNanos);
+        lastVelocityX = velocityX;
+        lastVelocityY = velocityY;
+        lastVelocityZ = velocityZ;
+        if (queuedNanos > SLOW_S12_QUEUE_NANOS) {
+            pendingTimingAnomaly = "S12 queue=" + formatMillis(queuedNanos)
+                    + "ms, velocity=" + formatVector(velocityX, velocityY, velocityZ);
+        }
+    }
+
+    synchronized TimingLog recordGameLoop(long startedAtNanos, long completedAtNanos, int advancedTicks) {
+        if (timingWindowStartedAtNanos == 0L) {
+            timingWindowStartedAtNanos = startedAtNanos;
+        }
+
+        long pumpIntervalNanos = previousPumpStartedAtNanos == 0L
+                ? 0L
+                : Math.max(0L, startedAtNanos - previousPumpStartedAtNanos);
+        previousPumpStartedAtNanos = startedAtNanos;
+        long durationNanos = Math.max(0L, completedAtNanos - startedAtNanos);
+
+        ++pumpCount;
+        if (pumpIntervalNanos > 0L) {
+            ++pumpIntervalCount;
+            totalPumpIntervalNanos += pumpIntervalNanos;
+            maxPumpIntervalNanos = Math.max(maxPumpIntervalNanos, pumpIntervalNanos);
+        }
+        totalLoopDurationNanos += durationNanos;
+        maxLoopDurationNanos = Math.max(maxLoopDurationNanos, durationNanos);
+        advancedTickCount += Math.max(0, advancedTicks);
+        if (advancedTicks > 1) {
+            ++multiTickPumpCount;
+            catchUpTickCount += advancedTicks - 1L;
+        }
+
+        List<String> anomalies = new ArrayList<>(4);
+        if (pumpIntervalNanos > SLOW_LOOP_NANOS) {
+            anomalies.add("pump interval=" + formatMillis(pumpIntervalNanos) + "ms");
+        }
+        if (durationNanos > SLOW_LOOP_NANOS) {
+            anomalies.add("loop duration=" + formatMillis(durationNanos) + "ms");
+        }
+        if (advancedTicks > 1) {
+            anomalies.add("advancedTicks=" + advancedTicks);
+        }
+        if (pendingTimingAnomaly != null) {
+            anomalies.add(pendingTimingAnomaly);
+            pendingTimingAnomaly = null;
+        }
+
+        String anomaly = null;
+        if (!anomalies.isEmpty()
+                && (lastTimingAnomalyAtNanos == 0L
+                        || completedAtNanos - lastTimingAnomalyAtNanos >= TIMING_ANOMALY_COOLDOWN_NANOS)) {
+            lastTimingAnomalyAtNanos = completedAtNanos;
+            anomaly = baseFields() + ", " + String.join(", ", anomalies);
+        }
+
+        String summary = null;
+        long windowNanos = completedAtNanos - timingWindowStartedAtNanos;
+        if (windowNanos >= TIMING_SUMMARY_INTERVAL_NANOS) {
+            summary = timingSummary(windowNanos);
+            resetTimingWindow(completedAtNanos);
+        }
+        return new TimingLog(anomaly, summary);
+    }
+
     synchronized void noteTargetSeen(int entityId) {
         long now = System.currentTimeMillis();
         this.expectedTargetEntityId = entityId;
@@ -139,8 +245,9 @@ final class BotSessionDiagnostics {
         this.repairRequestedForCurrentMissingEpisode = false;
     }
 
-    synchronized int noteTargetMissingTick() {
-        return ++consecutiveMissingTargetTicks;
+    synchronized int noteTargetMissingTicks(int ticks) {
+        consecutiveMissingTargetTicks += Math.max(0, ticks);
+        return consecutiveMissingTargetTicks;
     }
 
     synchronized boolean shouldLogTargetLoss() {
@@ -292,7 +399,62 @@ final class BotSessionDiagnostics {
                 + ", duelStartedAtMillis=" + duelStartedAtMillis;
     }
 
+    private String timingSummary(long windowNanos) {
+        double windowSeconds = windowNanos / 1_000_000_000.0D;
+        return baseFields()
+                + ", windowSeconds=" + formatDecimal(windowSeconds)
+                + ", pumps=" + pumpCount
+                + ", avgPumpIntervalMs=" + formatMillis(
+                        pumpIntervalCount == 0L ? 0L : totalPumpIntervalNanos / pumpIntervalCount)
+                + ", maxPumpIntervalMs=" + formatMillis(maxPumpIntervalNanos)
+                + ", avgLoopDurationMs=" + formatMillis(
+                        pumpCount == 0L ? 0L : totalLoopDurationNanos / pumpCount)
+                + ", maxLoopDurationMs=" + formatMillis(maxLoopDurationNanos)
+                + ", logicalTicks=" + advancedTickCount
+                + ", tps=" + formatDecimal(windowSeconds <= 0.0D ? 0.0D : advancedTickCount / windowSeconds)
+                + ", multiTickPumps=" + multiTickPumpCount
+                + ", catchUpTicks=" + catchUpTickCount
+                + ", s12Count=" + s12Count
+                + ", avgS12QueueMs=" + formatMillis(s12Count == 0L ? 0L : totalS12QueueNanos / s12Count)
+                + ", maxS12QueueMs=" + formatMillis(maxS12QueueNanos)
+                + ", lastVelocity=" + formatVector(lastVelocityX, lastVelocityY, lastVelocityZ);
+    }
+
+    private void resetTimingWindow(long nowNanos) {
+        timingWindowStartedAtNanos = nowNanos;
+        pumpCount = 0L;
+        pumpIntervalCount = 0L;
+        totalPumpIntervalNanos = 0L;
+        maxPumpIntervalNanos = 0L;
+        totalLoopDurationNanos = 0L;
+        maxLoopDurationNanos = 0L;
+        advancedTickCount = 0L;
+        catchUpTickCount = 0L;
+        multiTickPumpCount = 0L;
+        s12Count = 0L;
+        totalS12QueueNanos = 0L;
+        maxS12QueueNanos = 0L;
+        lastVelocityX = 0.0D;
+        lastVelocityY = 0.0D;
+        lastVelocityZ = 0.0D;
+    }
+
+    private String formatMillis(long nanos) {
+        return formatDecimal(nanos / 1_000_000.0D);
+    }
+
+    private String formatDecimal(double value) {
+        return String.format(Locale.ROOT, "%.3f", value);
+    }
+
+    private String formatVector(double x, double y, double z) {
+        return "(" + formatDecimal(x) + "," + formatDecimal(y) + "," + formatDecimal(z) + ")";
+    }
+
     private String sanitize(String value) {
         return value == null ? "" : value.replace('\n', ' ').replace('\r', ' ');
+    }
+
+    record TimingLog(String anomaly, String summary) {
     }
 }

@@ -23,6 +23,9 @@ import java.util.Properties;
 public class MineralBotVelocity {
     private static final String DEFAULT_BOT_CONNECT_HOST = "127.0.0.1";
     private static final int DEFAULT_BOT_CONNECT_PORT = 25567;
+    private static final int DEFAULT_GAME_LOOP_WORKERS = Math.max(
+            2,
+            Math.min(8, Runtime.getRuntime().availableProcessors()));
 
     private final ProxyServer server;
     private final Logger logger;
@@ -66,7 +69,10 @@ public class MineralBotVelocity {
                 logger,
                 config.guideEnabled(),
                 config.botConnectHost(),
-                config.botConnectPort()
+                config.botConnectPort(),
+                config.gameLoopWorkers(),
+                config.timingDiagnostics(),
+                config.velocityInputRecoveryEnabled()
         );
 
         // Register Velocity and PacketEvents listeners
@@ -74,10 +80,14 @@ public class MineralBotVelocity {
         PacketEvents.getAPI().getEventManager().registerListener(new BotPacketDiagnosticsListener(botManager));
 
         logger.info(
-                "MineralBotVelocity has been initialized! guide-enabled={}, bot-connect={}:{}",
+                "MineralBotVelocity has been initialized! guide-enabled={}, bot-connect={}:{}, "
+                        + "game-loop-workers={}, timing-diagnostics={}, velocity-input-recovery-enabled={}",
                 config.guideEnabled(),
                 config.botConnectHost(),
-                config.botConnectPort()
+                config.botConnectPort(),
+                config.gameLoopWorkers(),
+                config.timingDiagnostics(),
+                config.velocityInputRecoveryEnabled()
         );
     }
 
@@ -100,15 +110,32 @@ public class MineralBotVelocity {
                 botConnectHost = DEFAULT_BOT_CONNECT_HOST;
             }
             int botConnectPort = parsePort(properties.getProperty("bot-connect-port"), DEFAULT_BOT_CONNECT_PORT);
+            int gameLoopWorkers = parsePositiveInt(
+                    "game-loop-workers",
+                    properties.getProperty("game-loop-workers"),
+                    DEFAULT_GAME_LOOP_WORKERS,
+                    64);
+            boolean timingDiagnostics = Boolean.parseBoolean(
+                    properties.getProperty("timing-diagnostics", "false"));
+            boolean velocityInputRecoveryEnabled = Boolean.parseBoolean(
+                    properties.getProperty("velocity-input-recovery-enabled", "false"));
 
             boolean needsWrite =
                     properties.getProperty("guide-enabled") == null
                             || properties.getProperty("bot-connect-host") == null
-                            || properties.getProperty("bot-connect-port") == null;
+                            || properties.getProperty("bot-connect-port") == null
+                            || properties.getProperty("game-loop-workers") == null
+                            || properties.getProperty("timing-diagnostics") == null
+                            || properties.getProperty("velocity-input-recovery-enabled") == null;
 
             properties.setProperty("guide-enabled", Boolean.toString(guideEnabled));
             properties.setProperty("bot-connect-host", botConnectHost);
             properties.setProperty("bot-connect-port", Integer.toString(botConnectPort));
+            properties.setProperty("game-loop-workers", Integer.toString(gameLoopWorkers));
+            properties.setProperty("timing-diagnostics", Boolean.toString(timingDiagnostics));
+            properties.setProperty(
+                    "velocity-input-recovery-enabled",
+                    Boolean.toString(velocityInputRecoveryEnabled));
 
             if (!Files.exists(configPath) || needsWrite) {
                 try (OutputStream output = Files.newOutputStream(configPath)) {
@@ -116,10 +143,40 @@ public class MineralBotVelocity {
                 }
             }
 
-            return new BotVelocityConfig(guideEnabled, botConnectHost, botConnectPort);
+            return new BotVelocityConfig(
+                    guideEnabled,
+                    botConnectHost,
+                    botConnectPort,
+                    gameLoopWorkers,
+                    timingDiagnostics,
+                    velocityInputRecoveryEnabled);
         } catch (IOException e) {
             logger.error("Failed to load bot-velocity config from {}", configPath, e);
-            return new BotVelocityConfig(true, DEFAULT_BOT_CONNECT_HOST, DEFAULT_BOT_CONNECT_PORT);
+            return new BotVelocityConfig(
+                    true,
+                    DEFAULT_BOT_CONNECT_HOST,
+                    DEFAULT_BOT_CONNECT_PORT,
+                    DEFAULT_GAME_LOOP_WORKERS,
+                    false,
+                    false);
+        }
+    }
+
+    private int parsePositiveInt(String key, String rawValue, int defaultValue, int maximum) {
+        if (rawValue == null || rawValue.trim().isEmpty()) {
+            return defaultValue;
+        }
+
+        try {
+            int value = Integer.parseInt(rawValue.trim());
+            if (value < 1 || value > maximum) {
+                logger.warn("{} {} is out of range. Falling back to {}.", key, rawValue, defaultValue);
+                return defaultValue;
+            }
+            return value;
+        } catch (NumberFormatException e) {
+            logger.warn("{} {} is invalid. Falling back to {}.", key, rawValue, defaultValue);
+            return defaultValue;
         }
     }
 
@@ -145,11 +202,24 @@ public class MineralBotVelocity {
         private final boolean guideEnabled;
         private final String botConnectHost;
         private final int botConnectPort;
+        private final int gameLoopWorkers;
+        private final boolean timingDiagnostics;
+        private final boolean velocityInputRecoveryEnabled;
 
-        private BotVelocityConfig(boolean guideEnabled, String botConnectHost, int botConnectPort) {
+        private BotVelocityConfig(
+                boolean guideEnabled,
+                String botConnectHost,
+                int botConnectPort,
+                int gameLoopWorkers,
+                boolean timingDiagnostics,
+                boolean velocityInputRecoveryEnabled
+        ) {
             this.guideEnabled = guideEnabled;
             this.botConnectHost = botConnectHost;
             this.botConnectPort = botConnectPort;
+            this.gameLoopWorkers = gameLoopWorkers;
+            this.timingDiagnostics = timingDiagnostics;
+            this.velocityInputRecoveryEnabled = velocityInputRecoveryEnabled;
         }
 
         private boolean guideEnabled() {
@@ -162,6 +232,18 @@ public class MineralBotVelocity {
 
         private int botConnectPort() {
             return botConnectPort;
+        }
+
+        private int gameLoopWorkers() {
+            return gameLoopWorkers;
+        }
+
+        private boolean timingDiagnostics() {
+            return timingDiagnostics;
+        }
+
+        private boolean velocityInputRecoveryEnabled() {
+            return velocityInputRecoveryEnabled;
         }
     }
 }

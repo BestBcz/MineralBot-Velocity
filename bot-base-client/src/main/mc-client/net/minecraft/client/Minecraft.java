@@ -327,7 +327,7 @@ public class Minecraft {
     @Nullable
     private SkinManager skinManager;
     private final Queue<FutureTask> futureTaskQueue = Queues.newArrayDeque();
-    protected Thread mainThread = Thread.currentThread();
+    protected volatile Thread mainThread = Thread.currentThread();
 
     /**
      * Set to true to keep the game loop running. Set to false by shutdown() to

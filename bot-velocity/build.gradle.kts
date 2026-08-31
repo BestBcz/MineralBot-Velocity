@@ -35,9 +35,15 @@ dependencies {
     
     // Dependencies
     implementation("it.unimi.dsi:fastutil:8.5.12")
+    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
 }
 
 tasks {
+    test {
+        useJUnitPlatform()
+    }
+
     shadowJar {
         relocate("it.unimi.dsi.fastutil", "com.mineralstudios.bot.fastutil")
     }
