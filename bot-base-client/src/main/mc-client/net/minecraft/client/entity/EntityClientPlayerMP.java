@@ -11,6 +11,8 @@ import net.minecraft.client.network.NetHandlerPlayClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.item.EntityItem;
 import net.minecraft.entity.item.EntityMinecart;
+import net.minecraft.entity.player.InventoryPlayer;
+import net.minecraft.inventory.Container;
 import net.minecraft.item.ItemStack;
 import net.minecraft.network.play.client.*;
 import net.minecraft.stats.StatBase;
@@ -110,6 +112,22 @@ public class EntityClientPlayerMP extends EntityPlayerSP implements FakePlayer {
             this.moveStrafing *= inputScale;
             this.moveForward *= inputScale;
         }
+    }
+
+    /**
+     * Raw Minecraft inventory accessors for Kotlin callers. The API-facing getters on
+     * AbstractClientPlayer intentionally expose wrapper interfaces with the same property names.
+     */
+    public InventoryPlayer getVanillaInventory() {
+        return this.inventory;
+    }
+
+    public Container getVanillaInventoryContainer() {
+        return this.inventoryContainer;
+    }
+
+    public Container getVanillaOpenContainer() {
+        return this.openContainer;
     }
 
     private boolean isVelocityInputRecoveryEnabled() {

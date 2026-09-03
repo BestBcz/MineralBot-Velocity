@@ -1105,6 +1105,11 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
                 var2.openContainer.putStackInSlot(p_147266_1_.func_149173_d(), p_147266_1_.func_149174_e());
             }
         }
+
+        if (this.gameController instanceof gg.mineral.bot.base.client.instance.ClientInstance instance) {
+            instance.preserveAcceptedInventoryPredictions(
+                    p_147266_1_.func_149175_c(), p_147266_1_.func_149173_d());
+        }
     }
 
     /**
@@ -1115,6 +1120,13 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
     public void handleConfirmTransaction(S32PacketConfirmTransaction p_147239_1_) {
         Container var2 = null;
         EntityClientPlayerMP var3 = this.gameController.thePlayer;
+
+        if (this.gameController instanceof gg.mineral.bot.base.client.instance.ClientInstance instance) {
+            instance.recordInventoryTransactionResult(
+                    p_147239_1_.func_148889_c(),
+                    p_147239_1_.func_148890_d(),
+                    p_147239_1_.func_148888_e());
+        }
 
         if (var3 != null) {
             if (p_147239_1_.func_148889_c() == 0) {
@@ -1145,6 +1157,10 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
             var2.inventoryContainer.putStacksInSlots(p_147241_1_.func_148910_d());
         } else if (p_147241_1_.func_148911_c() == var2.openContainer.windowId) {
             var2.openContainer.putStacksInSlots(p_147241_1_.func_148910_d());
+        }
+
+        if (this.gameController instanceof gg.mineral.bot.base.client.instance.ClientInstance instance) {
+            instance.recordInventoryWindowSync(p_147241_1_.func_148911_c());
         }
     }
 

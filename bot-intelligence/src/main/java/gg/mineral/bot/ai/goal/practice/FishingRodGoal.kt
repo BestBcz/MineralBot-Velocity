@@ -95,15 +95,24 @@ class FishingRodGoal(clientInstance: ClientInstance) :
         return bestSlot
     }
 
-    private fun switchBackToMelee(inventory: gg.mineral.bot.api.inv.Inventory) {
+    private fun switchBackToMelee(inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
         val meleeWeaponSlot = getBestMeleeWeaponSlot()
-        if (meleeWeaponSlot <= 8) {
-            selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
-            return
+        if (!isItemReadyInHotbar(meleeWeaponSlot, inventory)) {
+            moveItemToHotbar(meleeWeaponSlot, inventory)
+            return false
         }
 
-        moveItemToHotbar(meleeWeaponSlot, inventory)
-        selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
+        if (clientInstance.currentScreen != null) {
+            pressKey(10, Key.Type.KEY_ESCAPE)
+            return false
+        }
+
+        val hotbarSlot = resolveHotbarSlot(meleeWeaponSlot)
+        if (inventory.heldSlot != hotbarSlot) {
+            selectHotbarSlot(hotbarSlot)
+            return false
+        }
+        return true
     }
 
     private fun horizontalLeadTicks(enemyState: CombatPerception.PlayerState): Double {
@@ -142,22 +151,25 @@ class FishingRodGoal(clientInstance: ClientInstance) :
 
         if (enemy == null || enemyState == null) return
 
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
-            pressKey(10, Key.Type.KEY_ESCAPE)
-        }
-
         // Enemy in hit range -> immediately hand control back to melee goal.
         val distance = enemyState.distance3D
         if (distance <= MELEE_DANGER_RANGE) {
             tick.execute {
-                switchBackToMelee(inventory)
-                lastRodTick = clientInstance.currentTick
-                finish()
+                if (switchBackToMelee(inventory)) {
+                    lastRodTick = clientInstance.currentTick
+                    finish()
+                }
             }
             return
         }
 
-        tick.prerequisite("In Hotbar", rodSlot <= 8) { moveItemToHotbar(rodSlot, inventory) }
+        tick.prerequisite("In Hotbar", isItemReadyInHotbar(rodSlot, inventory)) {
+            moveItemToHotbar(rodSlot, inventory)
+        }
+
+        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
+            pressKey(10, Key.Type.KEY_ESCAPE)
+        }
 
         tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
             selectHotbarSlot(resolveHotbarSlot(rodSlot))
@@ -217,9 +229,10 @@ class FishingRodGoal(clientInstance: ClientInstance) :
                 // hook will be naturally cleaned up by item switch / later rod use.
                 tick.execute {
                     if (tickCount > 5) {
-                        switchBackToMelee(inventory)
-                        lastRodTick = clientInstance.currentTick
-                        finish()
+                        if (switchBackToMelee(inventory)) {
+                            lastRodTick = clientInstance.currentTick
+                            finish()
+                        }
                     }
                 }
             }

@@ -6,6 +6,7 @@ import gg.mineral.bot.api.controls.Mouse
 import gg.mineral.bot.api.entity.living.player.FakePlayer
 import gg.mineral.bot.api.event.EventHandler
 import gg.mineral.bot.api.goal.Goal
+import gg.mineral.bot.api.inv.InventoryTransactionStatus
 import gg.mineral.bot.api.screen.Screen
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.ScheduledExecutorService
@@ -71,6 +72,28 @@ interface ClientInstance : EventHandler {
      * @return the fake player
      */
     val fakePlayer: FakePlayer
+
+    /** Whether this client can correlate inventory clicks with server acknowledgements. */
+    val supportsTrackedInventoryTransactions: Boolean
+        get() = false
+
+    /** True while a click acknowledgement or rejection resynchronization is outstanding. */
+    val hasPendingInventoryTransaction: Boolean
+        get() = false
+
+    /**
+     * Requests an inventory hotbar-swap transaction and returns an opaque transaction token.
+     *
+     * A null result means that the implementation cannot start a tracked transaction right now.
+     */
+    fun requestHotbarSwap(inventorySlot: Int, hotbarSlot: Int): Long? = null
+
+    /** Returns the latest state for a token returned by [requestHotbarSwap]. */
+    fun inventoryTransactionStatus(token: Long): InventoryTransactionStatus =
+        InventoryTransactionStatus.UNKNOWN
+
+    /** Releases a completed transaction token once the caller has consumed its result. */
+    fun forgetInventoryTransaction(token: Long) {}
 
     /**
      * Returns whether a sporadic foreground goal is currently executing.

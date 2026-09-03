@@ -107,7 +107,7 @@ class EatEnchantedGappleGoal(clientInstance: ClientInstance) : InventoryGoal(cli
         tick.finishIf("32-tick enchanted golden apple use complete", eating && eatingStartTick != -1 && clientInstance.currentTick - eatingStartTick >= EAT_TICKS)
         tick.finishIf("No enchanted golden apple found", gappleSlot == -1)
 
-        tick.prerequisite("In Hotbar", gappleSlot <= 8) {
+        tick.prerequisite("In Hotbar", isItemReadyInHotbar(gappleSlot, inventory)) {
             moveItemToHotbar(gappleSlot, inventory)
         }
 

@@ -218,7 +218,7 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
             return
         }
 
-        tick.prerequisite("In Hotbar", pearlSlot <= 8) {
+        tick.prerequisite("In Hotbar", isItemReadyInHotbar(pearlSlot, fakePlayer.inventory)) {
             moveItemToHotbar(pearlSlot, fakePlayer.inventory)
         }
 

@@ -69,7 +69,7 @@ class ReplaceArmorGoal(clientInstance: ClientInstance) : InventoryGoal(clientIns
 
         tick.finishIf("No Valid Armor Found", armorSlot == -1)
 
-        tick.prerequisite("In Hotbar", armorSlot <= 8) {
+        tick.prerequisite("In Hotbar", isItemReadyInHotbar(armorSlot, inventory)) {
             moveItemToHotbar(armorSlot, inventory)
         }
 

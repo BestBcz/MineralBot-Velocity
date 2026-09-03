@@ -79,7 +79,7 @@ class HealSoupGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstanc
 
         tick.finishIf("Soup Not Needed", fakePlayer.health > 10)
 
-        tick.prerequisite("In Hotbar", soupSlot <= 8) {
+        tick.prerequisite("In Hotbar", isItemReadyInHotbar(soupSlot, inventory)) {
             moveItemToHotbar(soupSlot, inventory)
         }
 

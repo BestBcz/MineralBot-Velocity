@@ -14,6 +14,7 @@ import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.Inventory
 import gg.mineral.bot.api.inv.InventoryContainer
+import gg.mineral.bot.api.inv.InventoryTransactionStatus
 import gg.mineral.bot.api.inv.Slot
 import gg.mineral.bot.api.inv.item.Item
 import gg.mineral.bot.api.inv.item.ItemStack
@@ -21,8 +22,10 @@ import gg.mineral.bot.api.math.BoundingBox
 import gg.mineral.bot.api.math.simulation.PlayerMotionSimulator
 import gg.mineral.bot.api.screen.Screen
 import gg.mineral.bot.api.screen.type.ContainerScreen
+import gg.mineral.bot.api.screen.type.InventoryScreen
 import gg.mineral.bot.api.world.ClientWorld
 import gg.mineral.bot.api.world.block.Block
+import gg.mineral.bot.base.client.inventory.InventoryTransactionTracker
 import gg.mineral.bot.base.client.manager.InstanceManager
 import gg.mineral.bot.impl.thread.ThreadManager
 import it.unimi.dsi.fastutil.objects.ObjectLinkedOpenHashSet
@@ -37,6 +40,7 @@ import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiScreen
 import net.minecraft.client.multiplayer.WorldClient
 import net.minecraft.client.settings.KeyBinding
+import net.minecraft.network.play.client.C0EPacketClickWindow
 import net.minecraft.util.Session
 import org.apache.logging.log4j.LogManager
 
@@ -92,19 +96,113 @@ open class ClientInstance(
     private var foregroundGoalStartTick = -1
     private var lastForegroundGoalWarnTick = -200
     private var previousScreenOpen = false
+    private val inventoryTransactions =
+            InventoryTransactionTracker<net.minecraft.item.ItemStack>()
 
     override val keyboard: Keyboard
         get() = super.keyboard
     override val mouse: Mouse
         get() = super.mouse
+    override val supportsTrackedInventoryTransactions: Boolean
+        get() = true
+    override val hasPendingInventoryTransaction: Boolean
+        get() = inventoryTransactions.hasPending()
+    override fun requestHotbarSwap(inventorySlot: Int, hotbarSlot: Int): Long? {
+        if (inventorySlot !in 9..35 || hotbarSlot !in 0..8) return null
+        if (currentScreen !is InventoryScreen || inventoryTransactions.hasPending()) return null
+
+        val player = thePlayer ?: return null
+        val handler = netHandler ?: return null
+        val inventory = player.vanillaInventory
+        val container = player.vanillaInventoryContainer
+        if (player.vanillaOpenContainer !== container) return null
+
+        val sourceSlot = container.getSlotFromInventory(inventory, inventorySlot) ?: return null
+        val hotbarContainerSlot =
+                container.getSlotFromInventory(inventory, hotbarSlot) ?: return null
+        if (!sourceSlot.hasStack) return null
+
+        val actionNumber = container.getNextTransactionID(inventory)
+        val clickedItem =
+                container.slotClick(sourceSlot.slotNumber, hotbarSlot, 2, player)
+        val entry =
+                inventoryTransactions.register(
+                        windowId = container.windowId,
+                        actionNumber = actionNumber,
+                        sourceContainerSlot = sourceSlot.slotNumber,
+                        hotbarContainerSlot = hotbarContainerSlot.slotNumber,
+                        hotbarInventorySlot = hotbarSlot,
+                        sourceAfter = sourceSlot.stack?.copy(),
+                        hotbarAfter = hotbarContainerSlot.stack?.copy()
+                ) ?: return null
+
+        handler.addToSendQueue(
+                C0EPacketClickWindow(
+                        container.windowId,
+                        sourceSlot.slotNumber,
+                        hotbarSlot,
+                        2,
+                        clickedItem,
+                        actionNumber
+                )
+        )
+        return entry.token
+    }
+
+    override fun inventoryTransactionStatus(token: Long): InventoryTransactionStatus =
+            inventoryTransactions.status(token)
+
+    override fun forgetInventoryTransaction(token: Long) {
+        inventoryTransactions.forget(token)
+    }
+
+    /** Called by the play packet handler when the server resolves a window click. */
+    fun recordInventoryTransactionResult(windowId: Int, actionNumber: Short, accepted: Boolean) {
+        val entry = inventoryTransactions.complete(windowId, actionNumber, accepted) ?: return
+        if (!accepted) return
+
+        restoreAcceptedInventoryPrediction(entry)
+    }
+
+    /** Called after a full server inventory snapshot has been applied. */
+    fun recordInventoryWindowSync(windowId: Int) {
+        inventoryTransactions.markWindowSynchronized(windowId)
+        inventoryTransactions.consumeAcceptedForWindow(windowId).forEach {
+            restoreAcceptedInventoryPrediction(it)
+        }
+    }
+
+    /** Reapplies accepted predictions after an incremental server slot update. */
+    fun preserveAcceptedInventoryPredictions(windowId: Int, containerSlot: Int) {
+        inventoryTransactions.consumeAcceptedForSlot(windowId, containerSlot).forEach {
+            restoreAcceptedInventoryPrediction(it)
+        }
+    }
+
+    private fun restoreAcceptedInventoryPrediction(
+        entry: InventoryTransactionTracker.Entry<net.minecraft.item.ItemStack>
+    ) {
+        val player = thePlayer ?: return
+        val inventory = player.vanillaInventory
+        val container = player.vanillaInventoryContainer
+        if (container.windowId != entry.windowId) return
+
+        // The server accepted the exact predicted result carried by C0E. Reapply that result so an
+        // older SET_SLOT/WINDOW_ITEMS packet cannot leave the local view behind the server state.
+        container.getSlot(entry.sourceContainerSlot).putStack(entry.sourceAfter?.copy())
+        container
+                .getSlotFromInventory(inventory, entry.hotbarInventorySlot)
+                ?.putStack(entry.hotbarAfter?.copy())
+    }
+
     override val hasActiveSporadicGoal: Boolean
         get() = activeSporadicGoal() != null
     override val blocksContinuousInventory: Boolean
-        get() = activeSporadic()?.blocksContinuousInventory() == true
+        get() = inventoryTransactions.hasPending() || activeSporadic()?.blocksContinuousInventory() == true
     override val blocksContinuousAim: Boolean
         get() = activeSporadic()?.blocksContinuousAim() == true
     override val blocksContinuousAttack: Boolean
-        get() = activeSporadic()?.blocksContinuousAttack() == true
+        get() = inventoryTransactions.hasPending() || activeSporadic()?.blocksContinuousAttack() == true
     override val blocksContinuousMovement: Boolean
         get() = activeSporadic()?.blocksContinuousMovement() == true
 

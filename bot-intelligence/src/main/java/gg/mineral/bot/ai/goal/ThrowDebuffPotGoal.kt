@@ -115,7 +115,7 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
 
         tick.finishIf("No Valid Debuff Potion Found", debuffSlot == -1)
 
-        tick.prerequisite("In Hotbar", debuffSlot <= 8) {
+        tick.prerequisite("In Hotbar", isItemReadyInHotbar(debuffSlot, inventory)) {
             moveItemToHotbar(debuffSlot, inventory)
         }
 

@@ -130,7 +130,7 @@ class DrinkPotionGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
         tick.finishIf("No Valid Potion Found", potionSlot == -1)
 
-        tick.prerequisite("In Hotbar", potionSlot <= 8) {
+        tick.prerequisite("In Hotbar", isItemReadyInHotbar(potionSlot, inventory)) {
             moveItemToHotbar(potionSlot, inventory)
         }
 

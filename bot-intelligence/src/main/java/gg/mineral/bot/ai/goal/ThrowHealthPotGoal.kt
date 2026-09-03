@@ -19,7 +19,6 @@ import gg.mineral.bot.api.inv.item.ItemStack
 import gg.mineral.bot.api.math.simulation.PlayerMotionSimulator
 import gg.mineral.bot.api.math.trajectory.Trajectory
 import gg.mineral.bot.api.math.trajectory.throwable.SplashPotionTrajectory
-import gg.mineral.bot.api.screen.type.ContainerScreen
 import gg.mineral.bot.api.world.ClientWorld
 import gg.mineral.bot.api.world.block.Block
 import org.apache.commons.math3.analysis.UnivariateFunction
@@ -126,34 +125,26 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
 
         tick.finishIf("No Valid Health Pot Found", healthSlot == -1)
 
-        // If potion is already in hotbar, just select it
-        if (healthSlot <= 8) {
-            // Close inventory if open
-            tick.prerequisite("Screen Closed", clientInstance.currentScreen == null) {
-                pressKey(10, Key.Type.KEY_ESCAPE)
-            }
+        tick.prerequisite("In Hotbar", isItemReadyInHotbar(healthSlot, inventory)) {
+            moveItemToHotbar(healthSlot, inventory)
+        }
 
-            // Select the potion
-            tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(healthSlot)) {
-                selectHotbarSlot(resolveHotbarSlot(healthSlot))
-            }
+        tick.prerequisite("Screen Closed", clientInstance.currentScreen == null) {
+            pressKey(10, Key.Type.KEY_ESCAPE)
+        }
 
-            // Verify we're holding a health pot
-            val isHoldingHealth = inventory.heldItemStack?.let { isHealthPot(it) } == true
+        tick.prerequisite(
+                "Correct Hotbar Slot Selected",
+                inventory.heldSlot == resolveHotbarSlot(healthSlot)
+        ) {
+            selectHotbarSlot(resolveHotbarSlot(healthSlot))
+        }
+
+        // Never aim or throw until the tracked swap is accepted and the expected potion is held.
+        val isHoldingHealth = inventory.heldItemStack?.let { isHealthPot(it) } == true
+        tick.execute {
             if (isHoldingHealth) {
                 transitionTo(PotState.AIMING)
-            }
-        } else {
-            // Potion is in main inventory, need to move it
-            if (clientInstance.currentScreen == null) {
-                // Open inventory
-                pressKey(10, Key.Type.KEY_E)
-            } else if (clientInstance.currentScreen !is ContainerScreen) {
-                pressKey(10, Key.Type.KEY_ESCAPE)
-            } else {
-                // Inventory is open, move the item
-                moveItemToHotbar(healthSlot, inventory)
-                // Don't transition yet, let the move complete
             }
         }
     }

@@ -1,10 +1,10 @@
 package gg.mineral.bot.ai.goal.practice
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.goal.type.ConsumableUseSession
 import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
-import gg.mineral.bot.api.entity.effect.PotionEffectType
 import gg.mineral.bot.api.event.Event
 import gg.mineral.bot.api.goal.GoalDebugState
 import gg.mineral.bot.api.goal.Sporadic
@@ -49,7 +49,8 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     private var pendingRecoveryTarget: FluidTarget? = null
     private var recoveryAimStartTick = -1
     private var eatState = EatState.NONE
-    private var eatStartTick = -1
+    private var eatItemDurability = -1
+    private var eatSession: ConsumableUseSession? = null
     private val perception = CombatPerception(clientInstance)
 
     private enum class WaterState {
@@ -114,21 +115,47 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
 
     private fun isEatingApple(): Boolean = eatState != EatState.NONE
 
-    private fun hasRegenEffect(): Boolean {
-        val regenId = PotionEffectType.REGENERATION.id
-        return clientInstance.fakePlayer.activePotionEffectIds.any { it == regenId }
-    }
-
     private fun beginEating(state: EatState) {
+        val inventory = clientInstance.fakePlayer.inventory
+        val heldItem = inventory.heldItemStack
+        eatItemDurability =
+                if (heldItem?.item?.id == Item.GOLDEN_APPLE) heldItem.durability
+                else if (state == EatState.GOLDEN_HEAD) 1
+                else 0
         eatState = state
-        eatStartTick = clientInstance.currentTick
+        eatSession =
+                ConsumableUseSession(
+                        startedTick = clientInstance.currentTick,
+                        initialItemCount = countGoldenApples(eatItemDurability)
+                )
         lockAction(34)
     }
 
     private fun clearEatingState() {
+        val wasEating = isEatingApple()
+        if (wasEating) clientInstance.fakePlayer.stopUsingItem()
         eatState = EatState.NONE
-        eatStartTick = -1
+        eatItemDurability = -1
+        eatSession = null
         unpressButton(MouseButton.Type.RIGHT_CLICK)
+        if (wasEating) actionLockUntilTick = clientInstance.currentTick
+    }
+
+    private fun countGoldenApples(durability: Int): Int {
+        val inventory = clientInstance.fakePlayer.inventory
+        var count = 0
+        for (i in 0..35) {
+            val item = inventory.getItemStackAt(i) ?: continue
+            if (item.item.id == Item.GOLDEN_APPLE && item.durability == durability) {
+                count += item.count
+            }
+        }
+        return count
+    }
+
+    private fun finishEating() {
+        clearEatingState()
+        finish()
     }
 
     private fun canStartAction(): Boolean {
@@ -345,6 +372,18 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     ): Boolean {
         if (!isEatingApple()) return false
 
+        val session = eatSession
+        if (session != null &&
+                session.isComplete(
+                        currentTick = clientInstance.currentTick,
+                        currentItemCount = countGoldenApples(eatItemDurability),
+                        isUsingItem = clientInstance.fakePlayer.isEatingOrDrinking
+                )
+        ) {
+            tick.execute { finishEating() }
+            return true
+        }
+
         val preferHead = eatState == EatState.GOLDEN_HEAD
         val eatSlot = getGoldenAppleSlot(preferHead = preferHead)
         if (eatSlot == -1) {
@@ -355,7 +394,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             return true
         }
 
-        tick.prerequisite("Eat Item In Hotbar", eatSlot <= 8) {
+        tick.prerequisite("Eat Item In Hotbar", isItemReadyInHotbar(eatSlot, inventory)) {
             moveItemToHotbar(eatSlot, inventory)
         }
         tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
@@ -371,11 +410,6 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             if (enemy != null && enemy.distance3D < 12.0) {
                 setMouseYaw(perception.safeYawAwayFromNearestEnemy())
             }
-        }
-
-        val eatenLongEnough = eatStartTick != -1 && clientInstance.currentTick - eatStartTick >= 34
-        if (eatenLongEnough || hasRegenEffect()) {
-            tick.execute { clearEatingState() }
         }
 
         return true
@@ -664,7 +698,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         val bucketSlot = getBucketRecoverySlot()
         if (bucketSlot == -1) return false
 
-        tick.prerequisite("Bucket In Hotbar", bucketSlot <= 8) { moveItemToHotbar(bucketSlot, inventory) }
+        tick.prerequisite("Bucket In Hotbar", isItemReadyInHotbar(bucketSlot, inventory)) {
+            moveItemToHotbar(bucketSlot, inventory)
+        }
         tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
         }
@@ -717,7 +753,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
             return false
         }
 
-        tick.prerequisite("Water Control In Hotbar", waterSlot <= 8) {
+        tick.prerequisite("Water Control In Hotbar", isItemReadyInHotbar(waterSlot, inventory)) {
             moveItemToHotbar(waterSlot, inventory)
         }
         tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
@@ -807,7 +843,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         ) {
             val openerGapple = getGoldenAppleSlot(preferHead = false)
             if (openerGapple != -1) {
-                tick.prerequisite("Opener Gapple In Hotbar", openerGapple <= 8) {
+                tick.prerequisite("Opener Gapple In Hotbar", isItemReadyInHotbar(openerGapple, inventory)) {
                     moveItemToHotbar(openerGapple, inventory)
                 }
                 tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
@@ -828,7 +864,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (needsGoldenHead() && canEatHeadNow(fakePlayer.health)) {
             val headSlot = getGoldenAppleSlot(preferHead = true)
             if (headSlot != -1) {
-                tick.prerequisite("Head In Hotbar", headSlot <= 8) {
+                tick.prerequisite("Head In Hotbar", isItemReadyInHotbar(headSlot, inventory)) {
                     moveItemToHotbar(headSlot, inventory)
                 }
                 tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
@@ -850,7 +886,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         if (needsGoldenApple() && fakePlayer.health < GAPPLE_EAT_THRESHOLD && canEatGappleNow(fakePlayer.health)) {
             val gappleSlot = getGoldenAppleSlot()
             if (gappleSlot != -1) {
-                tick.prerequisite("Gapple In Hotbar", gappleSlot <= 8) {
+                tick.prerequisite("Gapple In Hotbar", isItemReadyInHotbar(gappleSlot, inventory)) {
                     moveItemToHotbar(gappleSlot, inventory)
                 }
                 tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
@@ -875,7 +911,7 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
         ) {
             val lavaSlot = getLavaSlot()
             if (lavaSlot != -1) {
-                tick.prerequisite("Lava In Hotbar", lavaSlot <= 8) {
+                tick.prerequisite("Lava In Hotbar", isItemReadyInHotbar(lavaSlot, inventory)) {
                     moveItemToHotbar(lavaSlot, inventory)
                 }
                 tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
@@ -942,7 +978,9 @@ class BuildUHCCombatGoal(clientInstance: ClientInstance) :
     }
 
     override fun debugSummary(): String {
-        return "eatState=$eatState,waterState=$waterState,actionLockRemaining=${actionLockUntilTick - clientInstance.currentTick},preFightGappleUsed=$preFightGappleUsed,lastGappleAgo=${clientInstance.currentTick - lastGappleEatTick},lastHeadAgo=${clientInstance.currentTick - lastHeadEatTick}"
+        val eatElapsed = eatSession?.let { clientInstance.currentTick - it.startedTick } ?: -1
+        val eatInitialCount = eatSession?.initialItemCount ?: -1
+        return "eatState=$eatState,eatElapsed=$eatElapsed,eatInitialCount=$eatInitialCount,waterState=$waterState,actionLockRemaining=${actionLockUntilTick - clientInstance.currentTick},preFightGappleUsed=$preFightGappleUsed,lastGappleAgo=${clientInstance.currentTick - lastGappleEatTick},lastHeadAgo=${clientInstance.currentTick - lastHeadEatTick}"
     }
 
     override fun onEnd() {

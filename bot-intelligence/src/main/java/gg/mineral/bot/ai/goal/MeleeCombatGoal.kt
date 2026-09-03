@@ -586,7 +586,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val inventory = fakePlayer.inventory
 
         if (!yieldingInventoryControl) {
-            tick.prerequisite("In Hotbar", meleeWeaponSlot <= 8) {
+            tick.prerequisite("In Hotbar", isItemReadyInHotbar(meleeWeaponSlot, inventory)) {
                 moveItemToHotbar(meleeWeaponSlot, inventory)
             }
         }

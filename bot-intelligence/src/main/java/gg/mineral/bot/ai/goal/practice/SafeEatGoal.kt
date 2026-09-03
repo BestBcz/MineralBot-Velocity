@@ -118,7 +118,9 @@ class SafeEatGoal(clientInstance: ClientInstance) :
         tick.finishIf("Hunger Full", fakePlayer.hunger >= 20)
         tick.finishIf("Food Window Unsafe", !eating && !canEatInWindow())
 
-        tick.prerequisite("In Hotbar", foodSlot <= 8) { moveItemToHotbar(foodSlot, inventory) }
+        tick.prerequisite("In Hotbar", isItemReadyInHotbar(foodSlot, inventory)) {
+            moveItemToHotbar(foodSlot, inventory)
+        }
 
         tick.prerequisite("Screen Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)

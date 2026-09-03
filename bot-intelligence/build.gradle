@@ -8,6 +8,13 @@ dependencies {
     compileOnly project(':bot-api')
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     implementation 'org.apache.commons:commons-math3:3.6.1'
+    testImplementation project(':bot-api')
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
 }
 
 jar {

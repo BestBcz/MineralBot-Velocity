@@ -56,14 +56,13 @@ class SelectKitGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstan
         
         tick.finishIf("No enchanted book found", bookSlot == -1)
         
-        // Close any open container first
+        // If book is in hotbar (slots 0-8)
+        tick.prerequisite("In Hotbar", isItemReadyInHotbar(bookSlot, inventory)) {
+            moveItemToHotbar(bookSlot, inventory)
+        }
+
         tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
             pressKey(10, Key.Type.KEY_ESCAPE)
-        }
-        
-        // If book is in hotbar (slots 0-8)
-        tick.prerequisite("In Hotbar", bookSlot <= 8) {
-            moveItemToHotbar(bookSlot, inventory)
         }
         
         tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(bookSlot)) {
