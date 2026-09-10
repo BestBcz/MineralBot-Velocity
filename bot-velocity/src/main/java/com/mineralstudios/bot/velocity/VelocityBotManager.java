@@ -314,7 +314,9 @@ public class VelocityBotManager {
 
         if (diagnostics.shouldWarnStartup(now)) {
             diagnostics.markStartupWarningLogged();
-            logger.warn("Bot startup missing packets. {}", diagnostics.startupSummary());
+            if (logger.isDebugEnabled()) {
+                logger.debug("Bot startup missing packets. {}", diagnostics.startupSummary());
+            }
         }
 
         if (!diagnostics.shouldFailStartup(now)) {
@@ -351,13 +353,16 @@ public class VelocityBotManager {
 
         if (diagnostics.shouldLogTargetLoss()) {
             diagnostics.markTargetLossLogged();
-            logger.warn("Bot lost its target entity. {}", diagnostics.targetSummary(false));
+            logger.warn("Bot {} lost target {}", botUuid, expectedTargetUuid);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Bot target diagnostics. {}", diagnostics.targetSummary(false));
+            }
         }
 
         long now = System.currentTimeMillis();
         if (diagnostics.shouldRequestRepair(now)) {
             diagnostics.markRepairRequested(now);
-            logger.warn("Requesting bot match entity repair. {}", diagnostics.targetSummary(false));
+            logger.debug("Requesting bot match entity repair: bot={}, target={}", botUuid, expectedTargetUuid);
             requestEntityRepair(diagnostics, "missing-target");
         }
     }
@@ -449,7 +454,7 @@ public class VelocityBotManager {
 
             bot.getConfiguration().getFriendlyUUIDs().clear();
             bot.getConfiguration().getFriendlyUUIDs().addAll(resolvedFriendlies);
-            logger.info("Refreshed friendly UUID aliases for bot {}: {}", ourBotUuid, resolvedFriendlies);
+            logger.debug("Refreshed friendly UUID aliases for bot {}: {}", ourBotUuid, resolvedFriendlies);
         }
     }
 
@@ -644,7 +649,7 @@ public class VelocityBotManager {
             if (runDir != null && runDir.exists()) {
                 try {
                     org.apache.commons.io.FileUtils.deleteDirectory(runDir);
-                    logger.info("Deleted bot run directory: {}", runDir.getAbsolutePath());
+                    logger.debug("Deleted bot run directory: {}", runDir.getAbsolutePath());
                 } catch (Exception e) {
                     logger.warn("Failed to delete bot run directory: {}", runDir.getAbsolutePath(), e);
                 }
@@ -693,7 +698,7 @@ public class VelocityBotManager {
         } else if (diagnostics != null) {
             String reason = frequentKick ? "frequent-connection-kick" : timeoutLike ? "read-timeout" : "bot-disconnected";
             if (duelStarted || requestAccepted) {
-                logger.warn("Bot {} disconnected after backend acceptance; backend will handle replacement/cleanup. reason={}",
+                logger.debug("Bot {} disconnected after backend acceptance; backend will handle replacement/cleanup. reason={}",
                         botUsername, reason);
             }
             if (!requestAccepted && !isRequestCancelled(requestToken)) {
@@ -750,7 +755,7 @@ public class VelocityBotManager {
                 }
                 break;
             default:
-                logger.info("Ignored subchannel: {}", subChannel);
+                logger.debug("Ignored subchannel: {}", subChannel);
         }
     }
 
@@ -773,11 +778,11 @@ public class VelocityBotManager {
             UUID playerUUID = UUID.fromString(playerUUIDStr);
 
             if (isRequestCancelled(requestToken)) {
-                logger.info("Ignoring cancelled BotDuel request. Player={}, Token={}", playerUUID, requestToken);
+                logger.debug("Ignoring cancelled BotDuel request. Player={}, Token={}", playerUUID, requestToken);
                 return;
             }
 
-            logger.info("Received BotDuel request: Player={}, Server={}, Kit={}, Difficulty={}, Latency={}ms, Token={}",
+            logger.debug("Received BotDuel request: Player={}, Server={}, Kit={}, Difficulty={}, Latency={}ms, Token={}",
                     playerUUID, serverName, kitType, difficulty.getId(), latencyMillis, requestToken);
 
             createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis, 0);
@@ -808,7 +813,7 @@ public class VelocityBotManager {
                 diagnostics.markRequestAccepted();
             }
             refreshAllFriendlyUuidMappings();
-            logger.info("Backend accepted bot request. ourUUID={}, serverUUID={}, token={}",
+            logger.debug("Backend accepted bot request. ourUUID={}, serverUUID={}, token={}",
                     ourBotUuid, serverBotUuid, requestToken);
         } catch (Exception e) {
             logger.error("Failed to parse BotRequestAccepted message", e);
@@ -831,7 +836,7 @@ public class VelocityBotManager {
             for (UUID botUuid : matchingBots) {
                 cleanupBot(botUuid, null, true);
             }
-            logger.info("Cancelled bot request token {} (active bots stopped={})", requestToken, matchingBots.size());
+            logger.debug("Cancelled bot request token {} (active bots stopped={})", requestToken, matchingBots.size());
         } catch (Exception e) {
             logger.error("Failed to parse BotRequestCancelled message", e);
         }
@@ -872,7 +877,7 @@ public class VelocityBotManager {
                 // Backwards compatibility with practice builds that only sent a 1v1 target.
             }
 
-            logger.info("BotDuel started: Owner={}, Target={}, Bot(server)={}, Kit={}, Difficulty={}, Token={}, Friendlies={}",
+            logger.debug("BotDuel started: Owner={}, Target={}, Bot(server)={}, Kit={}, Difficulty={}, Token={}, Friendlies={}",
                     playerUUID, targetUUID, serverBotUUID, kitType, difficulty.getId(), requestToken, friendlyUUIDs);
 
             boolean hasRequestToken = requestToken != null && !requestToken.isEmpty();
@@ -882,10 +887,10 @@ public class VelocityBotManager {
             ClientInstance bot = ourBotUUID == null ? null : activeBots.get(ourBotUUID);
 
             if (!hasRequestToken && !isBotUsable(bot)) {
-                logger.info("Bot not found by server UUID, searching by player UUID, difficulty, and request token...");
+                logger.debug("Bot not found by server UUID, searching by player UUID, difficulty, and request token...");
                 UUID candidateUuid = findCandidateBotUuid(playerUUID, kitType, difficulty, requestToken);
                 if (candidateUuid == null) {
-                    logger.info("No exact player/token match found, falling back to kit and difficulty...");
+                    logger.debug("No exact player/token match found, falling back to kit and difficulty...");
                     candidateUuid = findUsableBotByKit(kitType, difficulty);
                 }
 
@@ -893,14 +898,14 @@ public class VelocityBotManager {
                     ourBotUUID = candidateUuid;
                     bot = activeBots.get(ourBotUUID);
                     serverUuidToOurUuid.put(serverBotUUID, ourBotUUID);
-                    logger.info("Matched bot: ourUUID={}, serverUUID={}", ourBotUUID, serverBotUUID);
+                    logger.debug("Matched bot: ourUUID={}, serverUUID={}", ourBotUUID, serverBotUUID);
                 }
             }
 
             if (!isBotUsable(bot)) {
                 logger.warn("Could not find active bot for BotDuelStarted. Server UUID: {}", serverBotUUID);
-                logger.warn("Active bots: {}", activeBots.keySet());
-                logger.warn("Kit types: {}", kitTypes);
+                logger.debug("Active bots: {}", activeBots.keySet());
+                logger.debug("Kit types: {}", kitTypes);
                 return;
             }
 
@@ -921,10 +926,10 @@ public class VelocityBotManager {
             botDeclaredFriendlyUuids.put(ourBotUUID, new HashSet<>(friendlyUUIDs));
             refreshAllFriendlyUuidMappings();
 
-            logger.info("Configuring combat AI for bot {} with kit type {} at difficulty {}", ourBotUUID, kitType,
+            logger.debug("Configuring combat AI for bot {} with kit type {} at difficulty {}", ourBotUUID, kitType,
                     difficulty.getId());
             PracticeAI.INSTANCE.configureBotForKit(bot, kitType, difficulty);
-            logger.info("Combat systems activated for bot {}", ourBotUUID);
+            logger.info("Bot duel started: bot={}, kit={}, difficulty={}", ourBotUUID, kitType, difficulty.getId());
         } catch (Exception e) {
             logger.error("Failed to parse BotDuelStarted message", e);
         }
@@ -934,10 +939,10 @@ public class VelocityBotManager {
             String botUUIDStr = in.readUTF();
             UUID serverBotUUID = UUID.fromString(botUUIDStr);
 
-            logger.info("Received BotDisconnect request for: {}", serverBotUUID);
+            logger.debug("Received BotDisconnect request for: {}", serverBotUUID);
 
             UUID ourBotUUID = resolveToOurUuid(serverBotUUID);
-            logger.info("Resolved to our UUID: {}", ourBotUUID);
+            logger.debug("Resolved to our UUID: {}", ourBotUUID);
 
             cleanupBot(ourBotUUID, serverBotUUID, true);
 
@@ -1044,7 +1049,7 @@ public class VelocityBotManager {
                     return;
                 }
 
-                logger.info("Starting bot instance for {} (UUID: {}, Difficulty: {}, Latency: {}ms, Token: {})",
+                logger.debug("Starting bot instance for {} (UUID: {}, Difficulty: {}, Latency: {}ms, Token: {})",
                         config.getUsername(), botUUID, difficulty.getId(), latencyMillis, requestToken);
                 bot.run();
 
@@ -1145,7 +1150,7 @@ public class VelocityBotManager {
             logger.warn("Bot timing anomaly. {}", timingLog.anomaly());
         }
         if (timingLog.summary() != null) {
-            logger.info("Bot timing summary. {}", timingLog.summary());
+            logger.debug("Bot timing summary. {}", timingLog.summary());
         }
     }
 
@@ -1229,7 +1234,7 @@ public class VelocityBotManager {
         String username = event.getUsername();
         // Check if this is one of our bots
         if (botsByUsername.containsKey(username)) {
-            logger.info("Bypassing authentication for internal bot: {}", username);
+            logger.debug("Bypassing authentication for internal bot: {}", username);
             event.setResult(
                     com.velocitypowered.api.event.connection.PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
         }

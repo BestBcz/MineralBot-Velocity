@@ -93,7 +93,7 @@ class SelectKitGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstan
     
     override fun onEnd() {
         hasSelectedKit = true
-        logger.info("Kit selection completed")
+        logger.debug("Kit selection completed")
     }
     
     override fun onEvent(event: Event): Boolean {

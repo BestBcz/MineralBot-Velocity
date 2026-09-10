@@ -301,6 +301,9 @@ open class ClientInstance(
     }
 
     private fun observeForegroundGoalDiagnostics() {
+        // Normal actions such as drinking also hold controls for several ticks.
+        if (!logger.isDebugEnabled) return
+
         val goal = activeSporadicGoal()
         val goalName = goal?.javaClass?.simpleName
 
@@ -333,7 +336,7 @@ open class ClientInstance(
         val debugSummary = (goal as? GoalDebugState)?.debugSummary() ?: "n/a"
         val nearestEnemy = nearestEnemyDistance()?.let { formatDecimal(it) } ?: "none"
 
-        logger.warn(
+        logger.debug(
                 "Foreground goal stall: goal={} activeTicks={} blocks=[inv:{},aim:{},atk:{},move:{}] health={} hunger={} held={} screen={} keys={} buttons={} nearestEnemy={} debug={}",
                 goalName,
                 activeTicks,

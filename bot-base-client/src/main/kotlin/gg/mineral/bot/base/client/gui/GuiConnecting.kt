@@ -41,7 +41,7 @@ open class GuiConnecting : GuiScreen {
         this.port = socketAddress.port
 
         this.connectFunction = ConnectFunction { ip: String, port: Int ->
-            logger.info("Connecting to $ip, $port")
+            logger.debug("Connecting to $ip, $port")
             asyncExecutor.execute {
                 var iNetAddress: InetAddress? = null
                 try {
@@ -123,7 +123,7 @@ open class GuiConnecting : GuiScreen {
         this.port = portArg
 
         this.connectFunction = ConnectFunction { ip: String, port: Int ->
-            logger.info("Connecting to $ip, $port")
+            logger.debug("Connecting to $ip, $port")
             asyncExecutor.execute {
                 var iNetAddress: InetAddress? = null
                 try {
