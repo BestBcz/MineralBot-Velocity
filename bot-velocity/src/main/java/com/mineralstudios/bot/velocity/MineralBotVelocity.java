@@ -21,8 +21,8 @@ import java.util.Properties;
 @Plugin(id = "bot-velocity", name = "MineralBotVelocity", version = "6.7-SNAPSHOT", description = "Mineral-Bot integration for Velocity", authors = {
         "BestBcz" })
 public class MineralBotVelocity {
-    private static final String DEFAULT_BOT_CONNECT_HOST = "127.0.0.1";
-    private static final int DEFAULT_BOT_CONNECT_PORT = 25567;
+    private static final String DEFAULT_SECRET_FILE = "../../forwarding.secret";
+
     private static final int DEFAULT_GAME_LOOP_WORKERS = Math.max(
             2,
             Math.min(8, Runtime.getRuntime().availableProcessors()));
@@ -68,8 +68,7 @@ public class MineralBotVelocity {
                 server,
                 logger,
                 config.guideEnabled(),
-                config.botConnectHost(),
-                config.botConnectPort(),
+                config.forwarding(),
                 config.gameLoopWorkers(),
                 config.timingDiagnostics(),
                 config.velocityInputRecoveryEnabled()
@@ -80,11 +79,9 @@ public class MineralBotVelocity {
         PacketEvents.getAPI().getEventManager().registerListener(new BotPacketDiagnosticsListener(botManager));
 
         logger.info(
-                "MineralBotVelocity has been initialized! guide-enabled={}, bot-connect={}:{}, "
+                "MineralBotVelocity has been initialized! guide-enabled={}, connection-mode=direct-backend-bungeeguard, "
                         + "game-loop-workers={}, timing-diagnostics={}, velocity-input-recovery-enabled={}",
                 config.guideEnabled(),
-                config.botConnectHost(),
-                config.botConnectPort(),
                 config.gameLoopWorkers(),
                 config.timingDiagnostics(),
                 config.velocityInputRecoveryEnabled()
@@ -105,11 +102,8 @@ public class MineralBotVelocity {
             }
 
             boolean guideEnabled = Boolean.parseBoolean(properties.getProperty("guide-enabled", "true"));
-            String botConnectHost = properties.getProperty("bot-connect-host", DEFAULT_BOT_CONNECT_HOST).trim();
-            if (botConnectHost.isEmpty()) {
-                botConnectHost = DEFAULT_BOT_CONNECT_HOST;
-            }
-            int botConnectPort = parsePort(properties.getProperty("bot-connect-port"), DEFAULT_BOT_CONNECT_PORT);
+            String secretFile = properties.getProperty("bungeeguard-secret-file", DEFAULT_SECRET_FILE);
+            String forwardedIp = properties.getProperty("bot-forwarded-ip", "127.0.0.1").trim();
             int gameLoopWorkers = parsePositiveInt(
                     "game-loop-workers",
                     properties.getProperty("game-loop-workers"),
@@ -122,15 +116,17 @@ public class MineralBotVelocity {
 
             boolean needsWrite =
                     properties.getProperty("guide-enabled") == null
-                            || properties.getProperty("bot-connect-host") == null
-                            || properties.getProperty("bot-connect-port") == null
+                            || properties.getProperty("bungeeguard-secret-file") == null
+                            || properties.getProperty("bot-forwarded-ip") == null
                             || properties.getProperty("game-loop-workers") == null
                             || properties.getProperty("timing-diagnostics") == null
                             || properties.getProperty("velocity-input-recovery-enabled") == null;
 
             properties.setProperty("guide-enabled", Boolean.toString(guideEnabled));
-            properties.setProperty("bot-connect-host", botConnectHost);
-            properties.setProperty("bot-connect-port", Integer.toString(botConnectPort));
+            properties.setProperty("bungeeguard-secret-file", secretFile);
+            properties.setProperty("bot-forwarded-ip", forwardedIp);
+            needsWrite |= properties.remove("bot-connect-host") != null;
+            needsWrite |= properties.remove("bot-connect-port") != null;
             properties.setProperty("game-loop-workers", Integer.toString(gameLoopWorkers));
             properties.setProperty("timing-diagnostics", Boolean.toString(timingDiagnostics));
             properties.setProperty(
@@ -145,8 +141,7 @@ public class MineralBotVelocity {
 
             return new BotVelocityConfig(
                     guideEnabled,
-                    botConnectHost,
-                    botConnectPort,
+                    loadForwarding(secretFile, forwardedIp),
                     gameLoopWorkers,
                     timingDiagnostics,
                     velocityInputRecoveryEnabled);
@@ -154,8 +149,7 @@ public class MineralBotVelocity {
             logger.error("Failed to load bot-velocity config from {}", configPath, e);
             return new BotVelocityConfig(
                     true,
-                    DEFAULT_BOT_CONNECT_HOST,
-                    DEFAULT_BOT_CONNECT_PORT,
+                    null,
                     DEFAULT_GAME_LOOP_WORKERS,
                     false,
                     false);
@@ -180,43 +174,33 @@ public class MineralBotVelocity {
         }
     }
 
-    private int parsePort(String rawPort, int defaultPort) {
-        if (rawPort == null || rawPort.trim().isEmpty()) {
-            return defaultPort;
-        }
-
+    private gg.mineral.bot.base.client.instance.BungeeGuardForwarding loadForwarding(String file, String ip) {
         try {
-            int port = Integer.parseInt(rawPort.trim());
-            if (port < 1 || port > 65535) {
-                logger.warn("bot-connect-port {} is out of range. Falling back to {}.", rawPort, defaultPort);
-                return defaultPort;
-            }
-            return port;
-        } catch (NumberFormatException e) {
-            logger.warn("bot-connect-port {} is invalid. Falling back to {}.", rawPort, defaultPort);
-            return defaultPort;
+            var forwarding = gg.mineral.bot.base.client.instance.BungeeGuardForwarding.load(
+                    dataDirectory.resolve(file).normalize(), ip);
+            logger.info("BungeeGuard secret loaded");
+            return forwarding;
+        } catch (Exception e) {
+            logger.error("Direct backend connections disabled: check bungeeguard-secret-file and bot-forwarded-ip.");
+            return null;
         }
     }
-
     private static final class BotVelocityConfig {
         private final boolean guideEnabled;
-        private final String botConnectHost;
-        private final int botConnectPort;
+        private final gg.mineral.bot.base.client.instance.BungeeGuardForwarding forwarding;
         private final int gameLoopWorkers;
         private final boolean timingDiagnostics;
         private final boolean velocityInputRecoveryEnabled;
 
         private BotVelocityConfig(
                 boolean guideEnabled,
-                String botConnectHost,
-                int botConnectPort,
+                gg.mineral.bot.base.client.instance.BungeeGuardForwarding forwarding,
                 int gameLoopWorkers,
                 boolean timingDiagnostics,
                 boolean velocityInputRecoveryEnabled
         ) {
             this.guideEnabled = guideEnabled;
-            this.botConnectHost = botConnectHost;
-            this.botConnectPort = botConnectPort;
+            this.forwarding = forwarding;
             this.gameLoopWorkers = gameLoopWorkers;
             this.timingDiagnostics = timingDiagnostics;
             this.velocityInputRecoveryEnabled = velocityInputRecoveryEnabled;
@@ -226,14 +210,9 @@ public class MineralBotVelocity {
             return guideEnabled;
         }
 
-        private String botConnectHost() {
-            return botConnectHost;
+        private gg.mineral.bot.base.client.instance.BungeeGuardForwarding forwarding() {
+            return forwarding;
         }
-
-        private int botConnectPort() {
-            return botConnectPort;
-        }
-
         private int gameLoopWorkers() {
             return gameLoopWorkers;
         }

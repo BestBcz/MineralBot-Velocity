@@ -41,13 +41,23 @@ import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.IChatComponent;
 
 public class VelocityBotManager {
+    private record DirectTarget(String name, java.net.InetSocketAddress address, com.velocitypowered.api.proxy.server.RegisteredServer server) { }
+
+    static boolean isPermanentLoginFailure(String reason) {
+        String lower = reason.toLowerCase(Locale.ROOT);
+        return lower.contains("unable to authenticate") || lower.contains("bungeeguard")
+                || lower.contains("ip forwarding") || lower.contains("forwarding_")
+                || lower.contains("invalid token") || lower.contains("invalid session")
+                || lower.contains("outdated") || lower.contains("encoderexception")
+                || lower.contains("uuid_mismatch") || lower.contains("illegalargumentexception")
+                || lower.contains("unknown host") || lower.contains("no pending bot match request");
+    }
 
     private final Object plugin;
     private final ProxyServer server;
     private final Logger logger;
     private final boolean guideEnabled;
-    private final String botConnectHost;
-    private final int botConnectPort;
+    private final gg.mineral.bot.base.client.instance.BungeeGuardForwarding forwarding;
     private final boolean timingDiagnosticsEnabled;
     private final boolean velocityInputRecoveryEnabled;
     private final BotLoopScheduler loopScheduler;
@@ -157,8 +167,7 @@ public class VelocityBotManager {
             ProxyServer server,
             Logger logger,
             boolean guideEnabled,
-            String botConnectHost,
-            int botConnectPort,
+            gg.mineral.bot.base.client.instance.BungeeGuardForwarding forwarding,
             int gameLoopWorkers,
             boolean timingDiagnosticsEnabled,
             boolean velocityInputRecoveryEnabled
@@ -167,19 +176,16 @@ public class VelocityBotManager {
         this.server = server;
         this.logger = logger;
         this.guideEnabled = guideEnabled;
-        this.botConnectHost = botConnectHost;
-        this.botConnectPort = botConnectPort;
+        this.forwarding = forwarding;
         this.timingDiagnosticsEnabled = timingDiagnosticsEnabled;
         this.velocityInputRecoveryEnabled = velocityInputRecoveryEnabled;
         int startupWorkers = Math.max(2, Math.min(4, gameLoopWorkers));
         this.loopScheduler = new BotLoopScheduler(gameLoopWorkers, startupWorkers);
 
         logger.info(
-                "VelocityBotManager initialized (guide-enabled={}, bot-connect={}:{}, game-loop-workers={}, "
+                "VelocityBotManager initialized (guide-enabled={}, connection-mode=direct-backend-bungeeguard, game-loop-workers={}, "
                         + "startup-workers={}, timing-diagnostics={}, velocity-input-recovery-enabled={})",
                 guideEnabled,
-                botConnectHost,
-                botConnectPort,
                 gameLoopWorkers,
                 startupWorkers,
                 timingDiagnosticsEnabled,
@@ -235,7 +241,9 @@ public class VelocityBotManager {
         out.writeUTF(diagnostics.getRequestToken() == null ? "" : diagnostics.getRequestToken());
         out.writeUTF(reason == null ? "unknown" : reason);
         out.writeUTF(detail == null ? "" : detail);
-        sendPluginMessageToPlayerServer(diagnostics.getPlayerUuid(), out.toByteArray());
+        if (!diagnostics.sendControl(out.toByteArray())) {
+            sendPluginMessageToPlayerServer(diagnostics.getPlayerUuid(), out.toByteArray());
+        }
     }
 
     private void requestEntityRepair(BotSessionDiagnostics diagnostics, String reason) {
@@ -248,12 +256,14 @@ public class VelocityBotManager {
         out.writeUTF(diagnostics.getPlayerUuid().toString());
         out.writeUTF(diagnostics.getRequestToken() == null ? "" : diagnostics.getRequestToken());
         out.writeUTF(reason == null ? "unknown" : reason);
-        sendPluginMessageToPlayerServer(diagnostics.getPlayerUuid(), out.toByteArray());
+        if (!diagnostics.sendControl(out.toByteArray())) {
+            sendPluginMessageToPlayerServer(diagnostics.getPlayerUuid(), out.toByteArray());
+        }
     }
 
     private void scheduleBotRecreate(
             UUID playerUUID,
-            String serverName,
+            DirectTarget target,
             String kitType,
             BotDifficulty difficulty,
             String requestToken,
@@ -266,7 +276,7 @@ public class VelocityBotManager {
         }
         server.getScheduler().buildTask(plugin, () -> {
             if (!shuttingDown.get() && !isRequestCancelled(requestToken)) {
-                createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
+                createAndConnectBot(playerUUID, target, kitType, difficulty, requestToken, latencyMillis,
                         nextRetryCount);
             }
         }).delay(delayMillis, TimeUnit.MILLISECONDS).schedule();
@@ -641,6 +651,7 @@ public class VelocityBotManager {
     private void shutdownBotInstance(UUID botUuid, ClientInstance bot) {
         try {
             File runDir = bot.mcDataDir;
+            bot.setBackendControlListener(null);
             bot.setPacketDiagnosticsListener(null);
             bot.setTimingDiagnosticsListener(null);
             closeBotNetwork(bot, "MineralBot cleanup");
@@ -663,7 +674,7 @@ public class VelocityBotManager {
             UUID ourBotUUID,
             ClientInstance bot,
             UUID playerUUID,
-            String serverName,
+            DirectTarget target,
             String kitType,
             BotDifficulty difficulty,
             String requestToken,
@@ -671,7 +682,7 @@ public class VelocityBotManager {
             int retryCount,
             String botUsername
     ) {
-        String disconnectText = getDisconnectText(bot);
+        String disconnectText = forwarding.redact(getDisconnectText(bot));
         if (disconnectText == null) {
             return false;
         }
@@ -683,17 +694,17 @@ public class VelocityBotManager {
         boolean duelStarted = diagnostics != null && diagnostics.isDuelStarted();
         boolean requestAccepted = diagnostics != null && diagnostics.isRequestAccepted();
 
-        logger.warn("Bot {} disconnected: {}", botUsername, disconnectText);
+        logger.warn("Bot {} disconnected at {}: {}", botUsername, bot.getDirectConnectionStage(), disconnectText);
         boolean frequentKick = isFrequentConnectionKick(disconnectText);
         boolean timeoutLike = isTimeoutLike(disconnectText);
 
         cleanupBot(ourBotUUID, null, true);
 
         if (!duelStarted && !requestAccepted && retryCount < MAX_STARTUP_RETRIES
-                && !isRequestCancelled(requestToken)) {
+                && !isRequestCancelled(requestToken) && !isPermanentLoginFailure(disconnectText)) {
             logger.warn("Bot {} disconnected before backend acceptance, recreating (retry #{}, reason={})",
                     botUsername, retryCount + 1, disconnectText);
-            scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
+            scheduleBotRecreate(playerUUID, target, kitType, difficulty, requestToken, latencyMillis,
                     retryCount + 1, retryDelayMillis(retryCount, frequentKick));
         } else if (diagnostics != null) {
             String reason = frequentKick ? "frequent-connection-kick" : timeoutLike ? "read-timeout" : "bot-disconnected";
@@ -722,20 +733,30 @@ public class VelocityBotManager {
             return;
         }
 
-        ByteArrayDataInput in = ByteStreams.newDataInput(event.getData());
+        event.setResult(PluginMessageEvent.ForwardResult.handled());
+        if (!(event.getSource() instanceof com.velocitypowered.api.proxy.ServerConnection source)) {
+            return;
+        }
+        handleBackendMessage(event.getData(), source.getServer(), true);
+    }
+
+    private void handleBackendMessage(byte[] payload,
+            com.velocitypowered.api.proxy.server.RegisteredServer source, boolean allowCreate) {
+        if (shuttingDown.get()) return;
+        ByteArrayDataInput in = ByteStreams.newDataInput(payload);
         String subChannel;
         try {
             subChannel = in.readUTF();
             // logger.info("Plugin Message received on channel: {} with subchannel: {}",
             // identifier.getId(), subChannel);
         } catch (Exception e) {
-            logger.error("Failed to read subchannel from plugin message on " + identifier.getId(), e);
+            logger.warn("Invalid MineralBot control message");
             return;
         }
 
         switch (subChannel) {
             case SUB_CHANNEL_BOT_DUEL:
-                handleBotDuelRequest(in);
+                if (allowCreate) handleBotDuelRequest(in, source);
                 break;
             case SUB_CHANNEL_BOT_DUEL_STARTED:
                 handleBotDuelStarted(in);
@@ -760,7 +781,7 @@ public class VelocityBotManager {
     }
 
 
-    private void handleBotDuelRequest(ByteArrayDataInput in) {
+    private void handleBotDuelRequest(ByteArrayDataInput in, com.velocitypowered.api.proxy.server.RegisteredServer source) {
         try {
             String playerUUIDStr = in.readUTF();
             String serverName = in.readUTF();
@@ -776,6 +797,25 @@ public class VelocityBotManager {
             }
 
             UUID playerUUID = UUID.fromString(playerUUIDStr);
+            var registered = server.getServer(serverName).orElse(null);
+            BotSessionDiagnostics rejected = new BotSessionDiagnostics(
+                    playerUUID, UUID.randomUUID(), "uncreated", requestToken, 0);
+            if (registered == null || !source.getServerInfo().equals(registered.getServerInfo())) {
+                notifyBotDuelFailed(rejected, "TARGET_NOT_FOUND", "Request target must match its registered source server.");
+                return;
+            }
+            rejected.setControlSender(payload -> source.sendPluginMessage(MineralBotVelocity.MINERAL_BOT_CHANNEL, payload));
+            var address = registered.getServerInfo().getAddress();
+            if (address.getPort() < 1 || address.getHostString().isBlank()
+                    || address.getHostString().indexOf('\0') >= 0) {
+                notifyBotDuelFailed(rejected, "TARGET_ADDRESS_INVALID", "Invalid registered backend address.");
+                return;
+            }
+            if (forwarding == null) {
+                notifyBotDuelFailed(rejected, "SECRET_UNAVAILABLE", "Direct backend credentials are not configured.");
+                return;
+            }
+            DirectTarget target = new DirectTarget(serverName, address, registered);
 
             if (isRequestCancelled(requestToken)) {
                 logger.debug("Ignoring cancelled BotDuel request. Player={}, Token={}", playerUUID, requestToken);
@@ -783,9 +823,9 @@ public class VelocityBotManager {
             }
 
             logger.debug("Received BotDuel request: Player={}, Server={}, Kit={}, Difficulty={}, Latency={}ms, Token={}",
-                    playerUUID, serverName, kitType, difficulty.getId(), latencyMillis, requestToken);
+                    playerUUID, target, kitType, difficulty.getId(), latencyMillis, requestToken);
 
-            createAndConnectBot(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis, 0);
+            createAndConnectBot(playerUUID, target, kitType, difficulty, requestToken, latencyMillis, 0);
         } catch (Exception e) {
             logger.error("Failed to parse BotDuel message", e);
         }
@@ -945,17 +985,13 @@ public class VelocityBotManager {
             logger.debug("Resolved to our UUID: {}", ourBotUUID);
 
             cleanupBot(ourBotUUID, serverBotUUID, true);
-
-            server.getPlayer(serverBotUUID).ifPresent(player -> {
-                player.disconnect(net.kyori.adventure.text.Component.text("§eMatch ended. GG!"));
-            });
         } catch (Exception e) {
             logger.error("Failed to parse BotDisconnect message", e);
         }
     }
     private void createAndConnectBot(
             UUID playerUUID,
-            String serverName,
+            DirectTarget target,
             String kitType,
             BotDifficulty difficulty,
             String requestToken,
@@ -970,15 +1006,17 @@ public class VelocityBotManager {
         String botUsername = generateUniqueBotUsername(requestToken);
         BotSessionDiagnostics diagnostics =
                 new BotSessionDiagnostics(playerUUID, botUUID, botUsername, requestToken, retryCount);
+        diagnostics.setControlSender(payload -> target.server().sendPluginMessage(
+                MineralBotVelocity.MINERAL_BOT_CHANNEL, payload));
         BotLoopScheduler.LoopHandle loopHandle;
         try {
             loopHandle = loopScheduler.createHandle(
                     botUUID,
                     (stalledBotUuid, blockedNanos) -> handleBotLoopStall(
-                            stalledBotUuid, blockedNanos, playerUUID, serverName, kitType, difficulty,
+                            stalledBotUuid, blockedNanos, playerUUID, target, kitType, difficulty,
                             requestToken, latencyMillis, retryCount, botUsername, diagnostics),
                     (failedBotUuid, failure) -> handleBotLoopFailure(
-                            failedBotUuid, failure, playerUUID, serverName, kitType, difficulty,
+                            failedBotUuid, failure, playerUUID, target, kitType, difficulty,
                             requestToken, latencyMillis, retryCount, botUsername, diagnostics, false));
             botLoopHandles.put(botUUID, loopHandle);
         } catch (RejectedExecutionException rejected) {
@@ -995,14 +1033,6 @@ public class VelocityBotManager {
                         cleanupBot(botUUID, null, false);
                         return;
                     }
-
-                if (server.getServer(serverName).isEmpty()) {
-                    logger.error("Server {} not found", serverName);
-                    notifyBotDuelFailed(diagnostics, "server-not-found",
-                            "Backend server " + serverName + " is not registered on the proxy.");
-                    cleanupBot(botUUID, null, false);
-                    return;
-                }
 
                 BotConfiguration config = new BotConfiguration();
                 if (retryCount > 0) {
@@ -1034,7 +1064,16 @@ public class VelocityBotManager {
                     bot.setTimingDiagnosticsListener((event, queuedNanos, velocityX, velocityY, velocityZ) ->
                             diagnostics.recordTimingEvent(event, queuedNanos, velocityX, velocityY, velocityZ));
                 }
-                bot.setServer(botConnectHost, botConnectPort);
+                bot.setBungeeGuardForwarding(forwarding);
+                bot.setBackendControlListener(payload -> {
+                    if (activeBots.get(botUUID) == bot) handleBackendMessage(payload, target.server(), false);
+                });
+                bot.setServer(target.address().getHostString(), target.address().getPort());
+                diagnostics.noteConnectionTarget(target.name(), target.address().getHostString(),
+                        target.address().getPort(), forwarding.getForwardedIp());
+                logger.info("Direct bot connection: server={}, host={}, port={}, uuid={}, forwardedIp={}",
+                        target.name(), target.address().getHostString(), target.address().getPort(),
+                        botUUID, forwarding.getForwardedIp());
 
                 activeBots.put(botUUID, bot);
                 botTargets.put(botUUID, playerUUID);
@@ -1055,7 +1094,7 @@ public class VelocityBotManager {
 
                 loopScheduler.schedule(
                         loopHandle,
-                        () -> runBotGameLoop(botUUID, bot, playerUUID, serverName, kitType, difficulty,
+                        () -> runBotGameLoop(botUUID, bot, playerUUID, target, kitType, difficulty,
                                 requestToken, latencyMillis, retryCount, botUsername));
                 } catch (Exception e) {
                     logger.error("Failed to start bot {}", botUsername, e);
@@ -1063,8 +1102,8 @@ public class VelocityBotManager {
                     if (shuttingDown.get() || isRequestCancelled(requestToken)) {
                         return;
                     }
-                    if (retryCount < MAX_STARTUP_RETRIES) {
-                        scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
+                    if (retryCount < MAX_STARTUP_RETRIES && !(e instanceof IllegalArgumentException)) {
+                        scheduleBotRecreate(playerUUID, target, kitType, difficulty, requestToken, latencyMillis,
                                 retryCount + 1, retryDelayMillis(retryCount, false));
                     } else {
                         notifyBotDuelFailed(diagnostics, "create-failed", e.toString());
@@ -1085,7 +1124,7 @@ public class VelocityBotManager {
             UUID botUUID,
             ClientInstance bot,
             UUID playerUUID,
-            String serverName,
+            DirectTarget target,
             String kitType,
             BotDifficulty difficulty,
             String requestToken,
@@ -1103,7 +1142,7 @@ public class VelocityBotManager {
             boolean accepted = diagnostics != null && diagnostics.isRequestAccepted();
             cleanupBot(botUUID, null, false);
             if (!shuttingDown.get() && !accepted && retryCount < MAX_STARTUP_RETRIES) {
-                scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
+                scheduleBotRecreate(playerUUID, target, kitType, difficulty, requestToken, latencyMillis,
                         retryCount + 1, retryDelayMillis(retryCount, false));
             } else if (!accepted && diagnostics != null && !isRequestCancelled(requestToken)) {
                 notifyBotDuelFailed(diagnostics, "bot-stopped", "Bot instance stopped before backend acceptance.");
@@ -1111,6 +1150,12 @@ public class VelocityBotManager {
             return;
         }
 
+        BotSessionDiagnostics connectionDiagnostics = getDiagnostics(botUUID);
+        if (connectionDiagnostics != null) {
+            if (connectionDiagnostics.noteConnectionStage(bot.getDirectConnectionStage())) {
+                logger.info("Bot {} connection stage: {}", botUsername, bot.getDirectConnectionStage());
+            }
+        }
         int tickBefore = bot.getCurrentTick();
         long loopStartedAt = timingDiagnosticsEnabled ? System.nanoTime() : 0L;
         bot.runGameLoop();
@@ -1126,7 +1171,7 @@ public class VelocityBotManager {
             return;
         }
 
-        if (handleDisconnectedBot(botUUID, bot, playerUUID, serverName, kitType, difficulty,
+        if (handleDisconnectedBot(botUUID, bot, playerUUID, target, kitType, difficulty,
                 requestToken, latencyMillis, retryCount, botUsername)) {
             return;
         }
@@ -1158,7 +1203,7 @@ public class VelocityBotManager {
             UUID botUuid,
             long blockedNanos,
             UUID playerUUID,
-            String serverName,
+            DirectTarget target,
             String kitType,
             BotDifficulty difficulty,
             String requestToken,
@@ -1172,7 +1217,7 @@ public class VelocityBotManager {
                 new IllegalStateException("runGameLoop blocked for "
                         + TimeUnit.NANOSECONDS.toMillis(blockedNanos) + "ms"),
                 playerUUID,
-                serverName,
+                target,
                 kitType,
                 difficulty,
                 requestToken,
@@ -1187,7 +1232,7 @@ public class VelocityBotManager {
             UUID botUuid,
             Throwable failure,
             UUID playerUUID,
-            String serverName,
+            DirectTarget target,
             String kitType,
             BotDifficulty difficulty,
             String requestToken,
@@ -1206,19 +1251,20 @@ public class VelocityBotManager {
             diagnostics = initialDiagnostics;
         }
         if (diagnostics != null) {
-            diagnostics.noteDisconnect(failure.toString());
+            diagnostics.noteDisconnect(forwarding.redact(failure.toString()));
         }
         boolean accepted = diagnostics != null && diagnostics.isRequestAccepted();
         String reason = interruptLoop ? "game-loop-stalled" : "game-loop-failed";
-        logger.error("Bot {} {} (accepted={})", botUsername, reason, accepted, failure);
-        boolean retryAfterCleanup = !accepted && retryCount < MAX_STARTUP_RETRIES;
+        logger.error("Bot {} {} (accepted={}): {}", botUsername, reason, accepted, forwarding.redact(failure.toString()));
+        boolean retryAfterCleanup = !accepted && retryCount < MAX_STARTUP_RETRIES
+                && !isPermanentLoginFailure(failure.toString());
         if (!retryAfterCleanup && diagnostics != null
                 && !shuttingDown.get() && !isRequestCancelled(requestToken)) {
-            notifyBotDuelFailed(diagnostics, reason, failure.toString());
+            notifyBotDuelFailed(diagnostics, reason, forwarding.redact(failure.toString()));
         }
         cleanupBot(botUuid, null, true, interruptLoop, () -> {
             if (retryAfterCleanup && !shuttingDown.get() && !isRequestCancelled(requestToken)) {
-                scheduleBotRecreate(playerUUID, serverName, kitType, difficulty, requestToken, latencyMillis,
+                scheduleBotRecreate(playerUUID, target, kitType, difficulty, requestToken, latencyMillis,
                         retryCount + 1, retryDelayMillis(retryCount, false));
             }
         });
@@ -1227,17 +1273,6 @@ public class VelocityBotManager {
     private String generateUniqueBotUsername(String requestToken) {
         String token = requestToken == null ? "BOT0" : requestToken.toUpperCase(Locale.ROOT);
         return "_" + token;
-    }
-
-    @Subscribe
-    public void onPreLogin(com.velocitypowered.api.event.connection.PreLoginEvent event) {
-        String username = event.getUsername();
-        // Check if this is one of our bots
-        if (botsByUsername.containsKey(username)) {
-            logger.debug("Bypassing authentication for internal bot: {}", username);
-            event.setResult(
-                    com.velocitypowered.api.event.connection.PreLoginEvent.PreLoginComponentResult.forceOfflineMode());
-        }
     }
 
     @Subscribe

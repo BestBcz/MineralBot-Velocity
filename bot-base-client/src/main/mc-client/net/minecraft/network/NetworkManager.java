@@ -178,6 +178,14 @@ public class NetworkManager extends SimpleChannelInboundHandler<Packet> {
     }
 
     public void exceptionCaught(@NotNull ChannelHandlerContext p_exceptionCaught_1_, @NotNull Throwable p_exceptionCaught_2_) {
+        // Codec exceptions can contain packet contents. Direct forwarding carries credentials.
+        if (mc instanceof gg.mineral.bot.base.client.instance.ClientInstance bot
+                && bot.getBungeeGuardForwarding() != null) {
+            String type = p_exceptionCaught_2_.getClass().getSimpleName();
+            logger.warn("Direct backend network failure at {}: {}", bot.getDirectConnectionStage(), type);
+            this.closeChannel(new ChatComponentText("DIRECT_FAILED: " + type));
+            return;
+        }
         ChatComponentTranslation var3;
 
         if (p_exceptionCaught_2_ instanceof TimeoutException) {
@@ -344,6 +352,11 @@ public class NetworkManager extends SimpleChannelInboundHandler<Packet> {
      * certain how it gets sent)
      */
     public void closeChannel(IChatComponent p_150718_1_) {
+        if (p_150718_1_ != null && mc instanceof gg.mineral.bot.base.client.instance.ClientInstance bot
+                && bot.getBungeeGuardForwarding() != null) {
+            p_150718_1_ = new ChatComponentText(bot.getBungeeGuardForwarding()
+                    .redact(p_150718_1_.getUnformattedText()));
+        }
         if (this.terminationReason == null) {
             this.terminationReason = p_150718_1_;
         }

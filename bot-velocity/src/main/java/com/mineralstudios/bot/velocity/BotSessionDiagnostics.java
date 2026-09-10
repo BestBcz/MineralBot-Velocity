@@ -387,8 +387,36 @@ final class BotSessionDiagnostics {
         return String.join(", ", parts);
     }
 
+    private java.util.function.Consumer<byte[]> controlSender;
+
+    void setControlSender(java.util.function.Consumer<byte[]> sender) { controlSender = sender; }
+    boolean sendControl(byte[] payload) {
+        if (controlSender == null) return false;
+        controlSender.accept(payload);
+        return true;
+    }
+
+    private String connectionTarget = "unresolved";
+    private String connectionStage = "DIRECT_RESOLVE_TARGET";
+    private long connectionStageAtMillis;
+
+    synchronized void noteConnectionTarget(String server, String host, int port, String ip) {
+        connectionTarget = server + "@" + host + ":" + port + ", forwardedIp=" + ip;
+    }
+
+    synchronized boolean noteConnectionStage(String stage) {
+        if (!stage.equals(connectionStage)) {
+            connectionStage = stage;
+            connectionStageAtMillis = System.currentTimeMillis();
+            return true;
+        }
+        return false;
+    }
+
     private String baseFields() {
-        return "playerUuid=" + playerUuid
+        return "connectionMode=DIRECT_BACKEND_BUNGEEGUARD, target=" + connectionTarget
+                + ", connectionStage=" + connectionStage + ", connectionStageAtMillis=" + connectionStageAtMillis
+                + ", playerUuid=" + playerUuid
                 + ", ourBotUuid=" + ourBotUuid
                 + ", botUsername=" + botUsername
                 + ", requestToken=" + requestToken

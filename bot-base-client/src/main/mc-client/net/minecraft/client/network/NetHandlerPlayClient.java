@@ -185,6 +185,10 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
      * WorldClient and sets the player initial dimension
      */
     public void handleJoinGame(S01PacketJoinGame p_147282_1_) {
+        if (gameController instanceof gg.mineral.bot.base.client.instance.ClientInstance bot
+                && bot.getBungeeGuardForwarding() != null) {
+            bot.setDirectConnectionStage("DIRECT_JOIN_GAME");
+        }
         this.gameController.playerController = new PlayerControllerMP(this.gameController, this);
         this.clientWorldController = new WorldClient(this.gameController, this,
                 new WorldSettings(0L, p_147282_1_.func_149198_e(), false, p_147282_1_.func_149195_d(),
@@ -1607,6 +1611,10 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
             String subChannel = in.readUTF();
             if (!"BotKnockback".equals(subChannel)) {
+                if (gameController instanceof ClientInstance instance) {
+                    var listener = instance.getBackendControlListener();
+                    if (listener != null) listener.accept(data);
+                }
                 return true;
             }
 

@@ -90,6 +90,14 @@ public class NetHandlerLoginClient implements INetHandlerLoginClient {
     }
 
     public void handleLoginSuccess(S02PacketLoginSuccess p_147390_1_) {
+        if (mc instanceof gg.mineral.bot.base.client.instance.ClientInstance bot
+                && bot.getBungeeGuardForwarding() != null) {
+            if (!bot.getConfiguration().getUuid().equals(p_147390_1_.getProfile().getId())) {
+                networkManager.closeChannel(new net.minecraft.util.ChatComponentText("UUID_MISMATCH"));
+                return;
+            }
+            bot.setDirectConnectionStage("DIRECT_LOGIN_SUCCESS");
+        }
         this.networkManager.setConnectionState(EnumConnectionState.PLAY);
     }
 

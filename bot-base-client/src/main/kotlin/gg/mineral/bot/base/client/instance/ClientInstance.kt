@@ -74,6 +74,10 @@ open class ClientInstance(
         ),
         ClientInstance {
 
+    @Volatile var backendControlListener: java.util.function.Consumer<ByteArray>? = null
+    var bungeeGuardForwarding: BungeeGuardForwarding? = null
+    @Volatile var directConnectionStage: String = "DIRECT_RESOLVE_TARGET"
+
     // Active goals.
     private val goals = ObjectLinkedOpenHashSet<Goal>()
 

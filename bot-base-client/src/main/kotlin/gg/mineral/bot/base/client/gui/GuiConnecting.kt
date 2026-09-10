@@ -23,9 +23,9 @@ import java.net.InetAddress
 import java.net.UnknownHostException
 
 open class GuiConnecting : GuiScreen {
-    var networkManager: NetworkManager? = null
+    @Volatile var networkManager: NetworkManager? = null
 
-    var cancelled: Boolean = false
+    @Volatile var cancelled: Boolean = false
     private val previousScreen: GuiScreen
     private val ip: String
     private val port: Int
@@ -47,10 +47,18 @@ open class GuiConnecting : GuiScreen {
                 try {
                     if (this@GuiConnecting.cancelled) return@execute
 
+                    val client = mc as? gg.mineral.bot.base.client.instance.ClientInstance
+                    val handshakeAddress = client?.bungeeGuardForwarding?.createAddress(ip, this@GuiConnecting.mc.session.gameProfile) ?: ip
+                    client?.directConnectionStage = "DIRECT_TCP_CONNECTING"
                     iNetAddress = InetAddress.getByName(ip)
 
                     NetworkManager.provideLanClient(mc, iNetAddress, port).let {
                         this@GuiConnecting.networkManager = it
+                        if (this@GuiConnecting.cancelled) {
+                            it.closeChannel(ChatComponentText("Aborted"))
+                            return@execute
+                        }
+                        client?.directConnectionStage = "DIRECT_TCP_CONNECTED"
                         it
                             .setNetHandler(
                                 NetHandlerLoginClient(
@@ -61,12 +69,13 @@ open class GuiConnecting : GuiScreen {
                         it.scheduleOutboundPacket(
                             C00Handshake(
                                 5,
-                                ip,
+                                handshakeAddress,
                                 port,
                                 EnumConnectionState.LOGIN
                             ),
                             *arrayOfNulls(0)
                         )
+                        client?.directConnectionStage = "DIRECT_HANDSHAKE_QUEUED"
                         it.scheduleOutboundPacket(
                             C00PacketLoginStart(this@GuiConnecting.mc.session.gameProfile),
                             *arrayOfNulls(0)
@@ -92,8 +101,8 @@ open class GuiConnecting : GuiScreen {
                 } catch (e: Exception) {
                     if (this@GuiConnecting.cancelled) return@execute
 
-                    logger.error("Couldn\'t connect to server", e)
-                    var errorMessage = e.toString()
+                    logger.error("Could not connect to server: {}", e.javaClass.simpleName)
+                    var errorMessage = if ((mc as? gg.mineral.bot.base.client.instance.ClientInstance)?.bungeeGuardForwarding != null) "DIRECT_FAILED: ${e.javaClass.simpleName}" else e.toString()
 
                     if (iNetAddress != null) errorMessage = errorMessage.replace(("$iNetAddress:$port").toRegex(), "")
 
@@ -129,9 +138,17 @@ open class GuiConnecting : GuiScreen {
                 try {
                     if (this@GuiConnecting.cancelled) return@execute
 
+                    val client = mc as? gg.mineral.bot.base.client.instance.ClientInstance
+                    val handshakeAddress = client?.bungeeGuardForwarding?.createAddress(ip, this@GuiConnecting.mc.session.gameProfile) ?: ip
+                    client?.directConnectionStage = "DIRECT_TCP_CONNECTING"
                     iNetAddress = InetAddress.getByName(ip)
                     NetworkManager.provideLanClient(mc, iNetAddress, port).let {
                         this@GuiConnecting.networkManager = it
+                        if (this@GuiConnecting.cancelled) {
+                            it.closeChannel(ChatComponentText("Aborted"))
+                            return@execute
+                        }
+                        client?.directConnectionStage = "DIRECT_TCP_CONNECTED"
                         it
                             .setNetHandler(
                                 NetHandlerLoginClient(
@@ -142,12 +159,13 @@ open class GuiConnecting : GuiScreen {
                         it.scheduleOutboundPacket(
                             C00Handshake(
                                 5,
-                                ip,
+                                handshakeAddress,
                                 port,
                                 EnumConnectionState.LOGIN
                             ),
                             *arrayOfNulls(0)
                         )
+                        client?.directConnectionStage = "DIRECT_HANDSHAKE_QUEUED"
                         it.scheduleOutboundPacket(
                             C00PacketLoginStart(this@GuiConnecting.mc.session.gameProfile),
                             *arrayOfNulls(0)
@@ -172,8 +190,8 @@ open class GuiConnecting : GuiScreen {
                 } catch (e: Exception) {
                     if (this@GuiConnecting.cancelled) return@execute
 
-                    logger.error("Couldn\'t connect to server", e)
-                    var errorMessage = e.toString()
+                    logger.error("Could not connect to server: {}", e.javaClass.simpleName)
+                    var errorMessage = if ((mc as? gg.mineral.bot.base.client.instance.ClientInstance)?.bungeeGuardForwarding != null) "DIRECT_FAILED: ${e.javaClass.simpleName}" else e.toString()
 
                     if (iNetAddress != null) errorMessage = errorMessage.replace(("$iNetAddress:$port").toRegex(), "")
 

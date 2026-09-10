@@ -49,6 +49,8 @@ public class S02PacketLoginSuccess extends Packet {
      * processing. Currently true for: Disconnect, LoginSuccess, KeepAlive,
      * ServerQuery/Info, Ping/Pong
      */
+    public GameProfile getProfile() { return field_149602_a; }
+
     public boolean hasPriority() {
         return true;
     }
