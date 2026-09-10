@@ -8,7 +8,13 @@ dependencies {
     implementation project(':bot-api')
     compileOnly 'it.unimi.dsi:fastutil:8.5.18'
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
+    testImplementation 'org.apache.logging.log4j:log4j-api:2.25.3'
+    testImplementation 'it.unimi.dsi:fastutil:8.5.18'
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
 }
+
+tasks.withType(Test).configureEach { useJUnitPlatform() }
 
 jar {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE

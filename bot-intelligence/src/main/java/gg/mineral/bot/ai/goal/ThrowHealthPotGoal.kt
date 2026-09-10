@@ -1,6 +1,7 @@
 package gg.mineral.bot.ai.goal
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.goal.type.PotionThrowGate
 import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
@@ -57,6 +58,11 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     private var splashApplied: Boolean = false
     private var damagedAfterThrow: Boolean = false
     private var potionGoneTick: Int = -1
+    private var plannedPitch: Float? = null
+    private var plannedYaw = 0f
+    private var throwGate = PotionThrowGate()
+    private var existingPotionIds: Set<Int> = emptySet()
+    private var throwTick = -1
 
     override fun shouldExecute(): Boolean {
         // Cooldown between throws
@@ -85,6 +91,12 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     }
 
     override fun onStart() {
+        clientInstance.mouse.clearPendingClicks()
+        plannedPitch = null
+        throwGate = PotionThrowGate()
+        existingPotionIds = emptySet()
+        throwTick = -1
+        asyncTasks.clear()
         currentState = PotState.PREPARING
         stateStartTick = clientInstance.currentTick
         thrownPotionId = null
@@ -171,12 +183,17 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             return
         }
 
-        // Calculate optimal pitch after we're facing the right direction
-        tick.executeAsync(0, {
-            minimizePitch(fakePlayer, closestEnemy) { it.airTimeTicks.toDouble() }
-        }) {
-            setMousePitch(it)
+        // A mouse delta is applied later by the game loop. Never advance while the async
+        // calculation is pending, or before the resulting pitch is visible on the player.
+        if (plannedPitch == null) {
+            tick.executeAsync(0, {
+                minimizePitch(fakePlayer, closestEnemy) { it.airTimeTicks.toDouble() }
+            }) { plannedPitch = it.takeIf { pitch -> pitch.isFinite() } }
+            return
         }
+        val targetPitch = plannedPitch ?: return
+        setMousePitch(targetPitch)
+        if (kotlin.math.abs(fakePlayer.pitch - targetPitch) > 2f) return
 
         // Check throwing conditions
         val atWall = isAtWall()
@@ -250,9 +267,15 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         // Log for debugging
         logger.debug("Trajectory: {}, distance: {}, atWall: {}", trajectoryResult, distanceFromEnemies, atWall)
 
-        // Throw if we have a valid trajectory OR if health is critical
-        if ((validTrajectory && (atWall || goodDistance)) || criticalHealth) {
-            transitionTo(PotState.THROWING)
+        // Critical health may relax spacing, but must never bypass trajectory/aim validation.
+        tick.execute {
+            if (validTrajectory && (atWall || goodDistance || criticalHealth)) {
+                plannedYaw = targetYaw
+                throwGate.arm(clientInstance.currentTick, targetYaw, targetPitch)
+                transitionTo(PotState.THROWING)
+            } else {
+                plannedPitch = null
+            }
         }
 
         // Don't stay in aiming state too long
@@ -262,11 +285,25 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     }
 
     private fun handleThrowing(tick: Tick, fakePlayer: FakePlayer, inventory: gg.mineral.bot.api.inv.Inventory) {
-        // Throw the potion
-        pressButton(5, MouseButton.Type.RIGHT_CLICK)
+        // Keep the validated rotation until the server has spawned the projectile.
+        setMouseYaw(plannedYaw)
+        plannedPitch?.let { setMousePitch(it) }
+        if (!throwGate.issued) {
+            if (clientInstance.currentScreen != null || clientInstance.hasPendingInventoryTransaction ||
+                    inventory.heldItemStack?.let { isHealthPot(it) } != true) {
+                finish()
+                return
+            }
+            if (!throwGate.tryIssue(clientInstance.currentTick, fakePlayer.yaw, fakePlayer.pitch)) return
+            existingPotionIds = perception.potionProjectiles(16421).map { it.entity.entityId }.toSet()
+            throwTick = clientInstance.currentTick
+            pressButton(5, MouseButton.Type.RIGHT_CLICK)
+            return
+        }
 
         // Look for the thrown potion entity from the current perception snapshot.
         val nearbyPotion = perception.potionProjectiles(16421)
+            .filter { it.entity.entityId !in existingPotionIds && it.distance3D <= 3.0 }
             .minByOrNull { it.distance3D }
 
         if (nearbyPotion != null) {
@@ -277,7 +314,7 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             damagedAfterThrow = false
             potionGoneTick = -1
             transitionTo(PotState.TRACKING)
-        } else if (clientInstance.currentTick - stateStartTick > 10) {
+        } else if (clientInstance.currentTick - throwTick > 10) {
             // Couldn't find thrown potion after 10 ticks, assume it failed
             transitionTo(PotState.COOLDOWN)
         }
@@ -401,6 +438,10 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     }
 
     override fun onEnd() {
+        unpressButton(MouseButton.Type.RIGHT_CLICK)
+        plannedPitch = null
+        throwGate = PotionThrowGate()
+        asyncTasks.clear()
         if (clientInstance.currentScreen != null)
             pressKey(10, Key.Type.KEY_ESCAPE)
         healthRegression.clear()
