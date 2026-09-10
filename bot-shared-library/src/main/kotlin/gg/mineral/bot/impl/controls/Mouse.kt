@@ -214,6 +214,19 @@ open class Mouse(private val eventHandler: EventHandler) : gg.mineral.bot.api.co
         scheduledTasks.clear()
     }
 
+    override fun clearPendingClicks() {
+        // Context changes must not be vetoed by an eating goal's release-event handler.
+        mouseButtons.forEach { it.isPressed = false }
+        scheduledTasks.clear()
+        logs.clear()
+        currentLog = null
+        eventLog = null
+        iterator = null
+        dWheel = 0
+        dX = 0
+        dY = 0
+    }
+
     override fun changeYaw(dYaw: Float) {
         val defaultMouseSense = 0.5f
         val sensitivity = defaultMouseSense * 0.6f + 0.2f

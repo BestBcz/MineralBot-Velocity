@@ -149,6 +149,9 @@ interface Mouse {
      */
     fun stopAll()
 
+    /** Releases buttons and discards queued clicks when switching input contexts. */
+    fun clearPendingClicks() { stopAll() }
+
     /**
      * @return True if the mouse is grabbed, false otherwise.
      */

@@ -920,6 +920,15 @@ public class Minecraft {
      * Sets the argument GuiScreen as the main (topmost visible) screen.
      */
     public void displayGuiScreen(GuiScreen p_147108_1_) {
+        if (this instanceof gg.mineral.bot.base.client.instance.ClientInstance
+                && (p_147108_1_ instanceof net.minecraft.client.gui.inventory.GuiContainer
+                    || this.currentScreen instanceof net.minecraft.client.gui.inventory.GuiContainer)) {
+            this.getMouse().clearPendingClicks();
+            KeyBinding.setKeyBindState(this, -100, false);
+            KeyBinding.setKeyBindState(this, -99, false);
+            while (this.gameSettings.keyBindAttack.isPressed()) { }
+            while (this.gameSettings.keyBindUseItem.isPressed()) { }
+        }
         if (this.currentScreen != null)
             this.currentScreen.onGuiClosed();
 

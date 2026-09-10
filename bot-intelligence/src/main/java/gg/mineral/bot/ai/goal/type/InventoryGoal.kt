@@ -63,6 +63,7 @@ abstract class InventoryGoal(clientInstance: ClientInstance) : Goal(clientInstan
     }
 
     fun moveItemToHotbar(index: Int, inventory: Inventory, moveIndex: Int = 8) {
+        clientInstance.mouse.clearPendingClicks()
         pendingHotbarMove?.let { pending ->
             pollPendingHotbarMove(pending, inventory)
             return

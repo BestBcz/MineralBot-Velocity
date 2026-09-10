@@ -469,6 +469,11 @@ open class ClientInstance(
         get() = super.getSession()
 
     override fun <T : Event> callEvent(event: T): Boolean {
+        if (event is gg.mineral.bot.api.event.peripherals.MouseButtonEvent && event.pressed) {
+            if (currentScreen is InventoryScreen || hasPendingInventoryTransaction) return true
+            if (event.type == gg.mineral.bot.api.controls.MouseButton.Type.LEFT_CLICK &&
+                    blocksContinuousAttack) return true
+        }
         var cancelled = false
 
         activeSporadicGoal()?.let { goal ->
