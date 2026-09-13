@@ -545,23 +545,13 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         EXTRA_OFFENSIVE, OFFENSIVE, DEFENSIVE, EXTRA_DEFENSIVE
     }
 
-    private fun getBestMeleeWeaponSlot(): Int {
-        var bestMeleeWeaponSlot = 0
-        var damage = 0.0
+    private fun getBestMeleeWeaponSlot(): Int? {
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
 
-        // Look for a non-splash potion in one of the 36 slots
-        invLoop@ for (i in 0..35) {
-            val itemStack = inventory.getItemStackAt(i) ?: continue
-            val attackDamage = itemStack.attackDamage
-            if (attackDamage > damage) {
-                bestMeleeWeaponSlot = i
-                damage = attackDamage
-            }
+        return findBestMeleeWeaponSlot { slot ->
+            inventory.getItemStackAt(slot)?.attackDamage
         }
-
-        return bestMeleeWeaponSlot
     }
 
     private fun shouldYieldInventoryControl(): Boolean = clientInstance.blocksContinuousInventory
@@ -585,7 +575,9 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
 
-        if (!yieldingInventoryControl) {
+        // Empty-handed kits such as Sumo have no melee weapon to prepare. Their
+        // combat tick must still reach target acquisition and movement.
+        if (!yieldingInventoryControl && meleeWeaponSlot != null) {
             tick.prerequisite("In Hotbar", isItemReadyInHotbar(meleeWeaponSlot, inventory)) {
                 moveItemToHotbar(meleeWeaponSlot, inventory)
             }
@@ -600,7 +592,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             }
         }
 
-        if (!yieldingInventoryControl) {
+        if (!yieldingInventoryControl && meleeWeaponSlot != null) {
             tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(meleeWeaponSlot)) {
                 selectHotbarSlot(resolveHotbarSlot(meleeWeaponSlot))
             }
@@ -791,4 +783,22 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             recentHitsTaken = 0
         }
     }
+}
+
+internal inline fun findBestMeleeWeaponSlot(
+    slotCount: Int = 36,
+    attackDamageAt: (Int) -> Double?
+): Int? {
+    var bestSlot: Int? = null
+    var bestDamage = 0.0
+
+    for (slot in 0 until slotCount) {
+        val attackDamage = attackDamageAt(slot) ?: continue
+        if (attackDamage > bestDamage) {
+            bestSlot = slot
+            bestDamage = attackDamage
+        }
+    }
+
+    return bestSlot
 }
