@@ -276,6 +276,11 @@ public class GuiScreen extends Gui implements Screen {
      * Handles mouse input.
      */
     public void handleMouseInput() {
+        // Synthetic context cleanup only releases game bindings. It must not
+        // complete a container click/drag or drop a carried stack outside the GUI.
+        if (this.mc.getMouse().getEventContextReset()) {
+            return;
+        }
         int var1 = this.mc.getMouse().getEventX() * this.width / this.mc.displayWidth;
         int var2 = this.height - this.mc.getMouse().getEventY() * this.height / this.mc.displayHeight - 1;
         int var3 = this.mc.getMouse().getEventButton();

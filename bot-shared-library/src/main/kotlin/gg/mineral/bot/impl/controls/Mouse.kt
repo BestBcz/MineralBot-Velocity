@@ -84,6 +84,7 @@ open class Mouse(private val eventHandler: EventHandler) : gg.mineral.bot.api.co
     override var isGrabbed = true
 
     private val scheduledTasks = Object2LongOpenHashMap<Runnable>()
+    private val buttonVersions = LongArray(mouseButtons.size)
 
     fun onGameLoop(time: Long) {
         scheduledTasks.keys.removeIf { runnable: Runnable ->
@@ -115,13 +116,14 @@ open class Mouse(private val eventHandler: EventHandler) : gg.mineral.bot.api.co
 
             logger.debug("Pressing button: {}", type)
             button.isPressed = true
+            val version = ++buttonVersions[type.ordinal]
             if (currentLog != null) logs.add(currentLog)
             currentLog = Log(
                 type, true, x, y, dX, dY,
                 dWheel
             )
             if (durationMillis > 0 && durationMillis < Int.MAX_VALUE) schedule(
-                { unpressButton(type) },
+                { if (buttonVersions[type.ordinal] == version) unpressButton(type) },
                 durationMillis.toLong()
             )
         }
@@ -139,6 +141,7 @@ open class Mouse(private val eventHandler: EventHandler) : gg.mineral.bot.api.co
 
             logger.debug("Unpressing button: {}", type)
             button.isPressed = false
+            ++buttonVersions[type.ordinal]
             if (currentLog != null) logs.add(currentLog)
             currentLog = Log(type, false, x, y, dX, dY, dWheel)
         }
@@ -189,7 +192,8 @@ open class Mouse(private val eventHandler: EventHandler) : gg.mineral.bot.api.co
         val y: Int,
         val dX: Int,
         val dY: Int,
-        val dWheel: Int
+        val dWheel: Int,
+        val contextReset: Boolean = false
     )
 
     override fun setCursorPosition(x: Int, y: Int) {
@@ -209,9 +213,11 @@ open class Mouse(private val eventHandler: EventHandler) : gg.mineral.bot.api.co
     open val eventButtonState: Boolean
         get() = eventLog?.pressed == true
 
+    open val eventContextReset: Boolean
+        get() = eventLog?.contextReset == true
+
     override fun stopAll() {
-        unpressButton(*gg.mineral.bot.api.controls.MouseButton.Type.entries.toTypedArray())
-        scheduledTasks.clear()
+        clearPendingClicks()
     }
 
     override fun clearPendingClicks() {
@@ -225,6 +231,10 @@ open class Mouse(private val eventHandler: EventHandler) : gg.mineral.bot.api.co
         dWheel = 0
         dX = 0
         dY = 0
+        // Minecraft maintains its own KeyBinding state. Discard old presses, but
+        // deliver releases even if the synthetic button was already released.
+        mouseButtons.filter { it.type != gg.mineral.bot.api.controls.MouseButton.Type.UNKNOWN }
+            .forEach { logs.add(Log(it.type, false, x, y, 0, 0, 0, contextReset = true)) }
     }
 
     override fun changeYaw(dYaw: Float) {

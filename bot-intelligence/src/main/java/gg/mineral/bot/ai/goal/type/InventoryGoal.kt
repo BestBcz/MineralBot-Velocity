@@ -37,6 +37,8 @@ abstract class InventoryGoal(clientInstance: ClientInstance) : Goal(clientInstan
     }
 
     protected fun selectHotbarSlot(hotbarSlot: Int, delay: Int = 10) {
+        clientInstance.mouse.clearPendingClicks()
+        clientInstance.fakePlayer.stopUsingItem()
         val keyType =
                 when (hotbarSlot.coerceIn(0, 8)) {
                     0 -> Key.Type.KEY_1

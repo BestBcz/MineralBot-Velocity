@@ -1,5 +1,6 @@
 package gg.mineral.bot.ai.goal.practice
 
+import gg.mineral.bot.ai.goal.findBestMeleeWeaponSlot
 import gg.mineral.bot.ai.goal.type.InventoryGoal
 import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
@@ -9,246 +10,127 @@ import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.item.Item
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.cos
+import kotlin.math.sin
 
-/**
- * Fishing Rod Combat Goal for creating distance advantages.
- *
- * Uses fishing rod to:
- * - Pull enemies towards you for combos
- * - Knock enemies back when they're attacking
- * - Create gap to escape or pot
- */
-class FishingRodGoal(clientInstance: ClientInstance) :
-        InventoryGoal(clientInstance), Sporadic, Timebound {
-    private companion object {
-        const val MELEE_DANGER_RANGE = 3.1
-    }
-
-    override var executing: Boolean = false
+class FishingRodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound {
+    override var executing = false
     override var startTime: Long = 0
-    override val maxDuration: Long = 12
-
+    override val maxDuration: Long = 40
     private val perception = CombatPerception(clientInstance)
-    private var lastRodTick = 0
-    private var rodState = RodState.IDLE
-
-    private enum class RodState {
-        IDLE,
-        IN_FLIGHT
-    }
+    private var lastRodTick = -100
+    private var castTick = -1
+    private var returnTick = -1
+    private var aimTick = -1
+    private var targetId = -1
+    private var castYaw = 0f
+    private var castPitch = 0f
+    private var flightTicks = 0.0
+    private var returning = false
 
     override fun shouldExecute(): Boolean {
         val config = clientInstance.configuration
         if (clientInstance.currentTick - lastRodTick < config.rodCooldownTicks) return false
-
-        val fakePlayer = clientInstance.fakePlayer
-        val inventory = fakePlayer.inventory
-
-        if (!inventory.contains(Item.FISHING_ROD)) return false
-
-        val enemy = getClosestEnemyState() ?: return false
-        val distance = enemy.distance3D
-
-        return distance > maxOf(config.rodMinRange, MELEE_DANGER_RANGE) &&
-                distance <= config.rodMaxRange &&
-                enemy.lineOfSightLikelyClear
+        if (!clientInstance.fakePlayer.inventory.contains(Item.FISHING_ROD)) return false
+        val enemy = perception.bestTarget() ?: return false
+        return enemy.distance3D > maxOf(config.rodMinRange, config.rodCancelRange) &&
+            enemy.distance3D <= config.rodMaxRange && enemy.lineOfSightLikelyClear
     }
 
     override fun onStart() {
-        rodState = RodState.IDLE
+        clientInstance.mouse.clearPendingClicks()
+        clientInstance.keyboard.stopAll()
+        clientInstance.fakePlayer.stopUsingItem()
+        castTick = -1
+        returnTick = -1
+        aimTick = -1
+        returning = false
+        targetId = perception.bestTarget()?.entity?.entityId ?: -1
     }
 
-    private fun getClosestEnemyState(): CombatPerception.PlayerState? {
-        val targetSearchRange = clientInstance.configuration.targetSearchRange
-        return perception.snapshot().bestTargetState(null, targetSearchRange.toDouble())
-    }
-
-    private fun getRodSlot(): Int {
-        val fakePlayer = clientInstance.fakePlayer
-        val inventory = fakePlayer.inventory
-
-        for (i in 0..35) {
-            val itemStack = inventory.getItemStackAt(i) ?: continue
-            if (itemStack.item.id == Item.FISHING_ROD) {
-                return i
-            }
-        }
-        return -1
-    }
-
-    private fun getBestMeleeWeaponSlot(): Int {
-        val fakePlayer = clientInstance.fakePlayer
-        val inventory = fakePlayer.inventory
-
-        var bestSlot = 0
-        var bestDamage = Double.NEGATIVE_INFINITY
-
-        for (i in 0..35) {
-            val itemStack = inventory.getItemStackAt(i) ?: continue
-            val damage = itemStack.attackDamage
-            if (damage > bestDamage) {
-                bestDamage = damage
-                bestSlot = i
-            }
-        }
-
-        return bestSlot
-    }
-
-    private fun switchBackToMelee(inventory: gg.mineral.bot.api.inv.Inventory): Boolean {
-        val meleeWeaponSlot = getBestMeleeWeaponSlot()
-        if (!isItemReadyInHotbar(meleeWeaponSlot, inventory)) {
-            moveItemToHotbar(meleeWeaponSlot, inventory)
-            return false
-        }
-
-        if (clientInstance.currentScreen != null) {
-            pressKey(10, Key.Type.KEY_ESCAPE)
-            return false
-        }
-
-        val hotbarSlot = resolveHotbarSlot(meleeWeaponSlot)
-        if (inventory.heldSlot != hotbarSlot) {
-            selectHotbarSlot(hotbarSlot)
-            return false
-        }
+    private fun restoreMelee(): Boolean {
+        val inventory = clientInstance.fakePlayer.inventory
+        val slot = findBestMeleeWeaponSlot(36) { inventory.getItemStackAt(it)?.attackDamage } ?: return true
+        if (!isItemReadyInHotbar(slot, inventory)) { moveItemToHotbar(slot, inventory); return false }
+        if (clientInstance.currentScreen != null) { pressKey(10, Key.Type.KEY_ESCAPE); return false }
+        if (inventory.heldSlot != slot) { selectHotbarSlot(slot); return false }
         return true
     }
 
-    private fun horizontalLeadTicks(enemyState: CombatPerception.PlayerState): Double {
-        val configuredLead = clientInstance.configuration.rodPredictionMultiplier
-        val distance = enemyState.distance2D
-        val maxLeadByRange =
-                when {
-                    distance <= 4.0 -> 1.05
-                    distance <= 7.0 -> 1.45
-                    else -> 1.95
-                }
-        val speedScale =
-                when {
-                    enemyState.horizontalSpeed >= 0.32 -> 0.70
-                    enemyState.horizontalSpeed >= 0.22 -> 0.85
-                    else -> 1.0
-                }
-        val approachScale = if (enemyState.movingTowardSelf) 0.85 else 1.0
-        return (configuredLead * speedScale * approachScale).coerceIn(0.45, maxLeadByRange)
-    }
-
-    private fun horizontalPredictionOffset(velocity: Double, leadTicks: Double, distance: Double): Double {
-        val maxOffset = (distance * 0.16).coerceIn(0.18, 0.85)
-        return (velocity * leadTicks).coerceIn(-maxOffset, maxOffset)
-    }
-
     override fun onTick(tick: Tick) {
-        val rodSlot = getRodSlot()
-        val fakePlayer = clientInstance.fakePlayer
-        val inventory = fakePlayer.inventory
-        val enemyState = getClosestEnemyState()
-        val enemy = enemyState?.entity
-
-        tick.finishIf("No Rod Found", rodSlot == -1)
-        tick.finishIf("No Enemy", enemy == null)
-
-        if (enemy == null || enemyState == null) return
-
-        // Enemy in hit range -> immediately hand control back to melee goal.
-        val distance = enemyState.distance3D
-        if (distance <= MELEE_DANGER_RANGE) {
-            tick.execute {
-                if (switchBackToMelee(inventory)) {
-                    lastRodTick = clientInstance.currentTick
-                    finish()
-                }
+        val player = clientInstance.fakePlayer
+        val inventory = player.inventory
+        val config = clientInstance.configuration
+        val enemy = perception.snapshot().enemies.firstOrNull { it.entity.entityId == targetId }
+        if (returning) {
+            if (restoreMelee()) finish()
+            return
+        }
+        if (castTick >= 0) {
+            unpressButton(MouseButton.Type.RIGHT_CLICK)
+            if (enemy == null || enemy.distance3D <= config.rodCancelRange || clientInstance.currentTick >= returnTick) {
+                returning = true
+                if (restoreMelee()) finish()
             }
             return
         }
-
-        tick.prerequisite("In Hotbar", isItemReadyInHotbar(rodSlot, inventory)) {
-            moveItemToHotbar(rodSlot, inventory)
+        if (enemy == null || !enemy.lineOfSightLikelyClear ||
+            enemy.distance3D <= config.rodCancelRange || enemy.distance3D > config.rodMaxRange) {
+            returning = true
+            if (restoreMelee()) finish()
+            return
         }
-
-        tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
-            pressKey(10, Key.Type.KEY_ESCAPE)
-        }
-
-        tick.prerequisite("Correct Hotbar Slot Selected", inventory.heldSlot == resolveHotbarSlot(rodSlot)) {
-            selectHotbarSlot(resolveHotbarSlot(rodSlot))
-        }
-
-        tick.finishIf("Not Holding Rod", inventory.heldItemStack?.item?.id != Item.FISHING_ROD)
-
-        when (rodState) {
-            RodState.IDLE -> {
-                val config = clientInstance.configuration
-                val leadTicks = horizontalLeadTicks(enemyState)
-                val predictedX =
-                        enemyState.x +
-                                horizontalPredictionOffset(enemyState.velocityX, leadTicks, enemyState.distance2D)
-                val predictedZ =
-                        enemyState.z +
-                                horizontalPredictionOffset(enemyState.velocityZ, leadTicks, enemyState.distance2D)
-
-                val dx = predictedX - fakePlayer.x
-                val dz = predictedZ - fakePlayer.z
-                val targetY =
-                        if (enemyState.onGround)
-                                enemyState.y - 0.83
-                        else enemyState.y + enemy.eyeHeight * 0.62
-                val dy = targetY - (fakePlayer.y + fakePlayer.eyeHeight)
-
-                val horizDist = sqrt(dx * dx + dz * dz).coerceAtLeast(0.001)
-                val yaw =
-                        Math.toDegrees(-fastArcTan(dx / dz)).toFloat().let {
-                            when {
-                                dz < 0 && dx < 0 ->
-                                        (90 + Math.toDegrees(fastArcTan(dz / dx))).toFloat()
-                                dz < 0 && dx > 0 ->
-                                        (-90 + Math.toDegrees(fastArcTan(dz / dx))).toFloat()
-                                else -> it
-                            }
-                        }
-
-                // Keep rod aim lower for grounded targets, but a bit higher if enemy is airborne.
-                val basePitch = Math.toDegrees(-fastArcTan(dy / horizDist)).toFloat()
-                val downwardBias =
-                        ((horizDist / 8.0).coerceIn(5.0, 15.0) - if (enemyState.onGround) 0.0 else 2.0)
-                                .toFloat()
-                val pitch = (basePitch + downwardBias + config.rodPitchBias).coerceIn(-20f, 36f)
-
-                setMouseYaw(yaw)
-                setMousePitch(pitch)
-
-                tick.execute {
-                    pressButton(25, MouseButton.Type.RIGHT_CLICK)
-                    rodState = RodState.IN_FLIGHT
-                }
+        val slot = (0..35).firstOrNull { inventory.getItemStackAt(it)?.item?.id == Item.FISHING_ROD } ?: -1
+        tick.finishIf("No rod", slot == -1)
+        tick.prerequisite("Rod in hotbar", isItemReadyInHotbar(slot, inventory)) { moveItemToHotbar(slot, inventory) }
+        tick.prerequisite("Inventory closed", clientInstance.currentScreen == null) { pressKey(10, Key.Type.KEY_ESCAPE) }
+        tick.prerequisite("Rod selected", inventory.heldSlot == resolveHotbarSlot(slot)) { selectHotbarSlot(resolveHotbarSlot(slot)) }
+        tick.execute {
+            if (inventory.heldItemStack?.item?.id != Item.FISHING_ROD) return@execute
+            // The mouse rotation is applied after the AI tick. Cast only after it is visible.
+            if (aimTick >= 0 && clientInstance.currentTick > aimTick &&
+                abs(angleDifference(player.yaw, castYaw)) <= 3f && abs(player.pitch - castPitch) <= 2f) {
+                pressButton(5, MouseButton.Type.RIGHT_CLICK)
+                castTick = clientInstance.currentTick
+                lastRodTick = castTick
+                returnTick = castTick + ceil(flightTicks).toInt() + 1
+                return@execute
             }
-
-            RodState.IN_FLIGHT -> {
-                // No explicit reel-in needed: switch back to melee weapon,
-                // hook will be naturally cleaned up by item switch / later rod use.
-                tick.execute {
-                    if (tickCount > 5) {
-                        if (switchBackToMelee(inventory)) {
-                            lastRodTick = clientInstance.currentTick
-                            finish()
-                        }
-                    }
-                }
+            val yawRadians = Math.toRadians(player.yaw.toDouble())
+            val launchDelay = (1.0 + clientInstance.latency.coerceAtLeast(0) / 50.0).coerceAtMost(3.0)
+            val self = perception.snapshot().self
+            val solution = RodAim.solve(
+                enemy.x - player.x - self.velocityX * launchDelay + cos(yawRadians) * 0.16,
+                enemy.y + 0.75 - (player.y + player.eyeHeight - 0.1),
+                enemy.z - player.z - self.velocityZ * launchDelay + sin(yawRadians) * 0.16,
+                enemy.velocityX, if (enemy.onGround) 0.0 else enemy.velocityY, enemy.velocityZ,
+                launchDelay,
+                config.rodPredictionMultiplier / 2.9
+            )
+            if (solution == null) {
+                returning = true
+                if (restoreMelee()) finish()
+                return@execute
             }
+            castYaw = solution.yaw
+            castPitch = (solution.pitch + config.rodPitchBias).coerceIn(-60f, 60f)
+            flightTicks = solution.flightTicks
+            aimTick = clientInstance.currentTick
+            setMouseYaw(castYaw)
+            setMousePitch(castPitch)
         }
     }
 
-    override fun blocksContinuousAim(): Boolean = true
-
-    override fun blocksContinuousAttack(): Boolean = true
+    override fun blocksContinuousAim() = castTick < 0
+    override fun blocksContinuousAttack() = true
     override fun onEnd() {
-        rodState = RodState.IDLE
+        clientInstance.mouse.clearPendingClicks()
+        clientInstance.fakePlayer.stopUsingItem()
+        // Also back off failed/aborted attempts instead of immediately monopolizing combat.
+        if (castTick < 0) lastRodTick = clientInstance.currentTick
     }
-
-    override fun onEvent(event: Event): Boolean {
-        return false
-    }
-
+    override fun onEvent(event: Event) = false
     override fun onGameLoop() {}
 }

@@ -32,6 +32,39 @@ class MouseContextTest {
         mouse.pressButton(Type.RIGHT_CLICK)
         mouse.clearPendingClicks()
         assertFalse(mouse.getButton(Type.RIGHT_CLICK).isPressed)
-        assertFalse(mouse.next())
+        val released = mutableSetOf<Type>()
+        while (mouse.next()) {
+            assertFalse(mouse.eventButtonState)
+            assertTrue(mouse.eventContextReset)
+            mouse.eventButtonType?.let { released.add(it) }
+        }
+        assertTrue(Type.RIGHT_CLICK in released)
+    }
+
+    @Test fun `old timed release cannot cancel a new right click hold`() {
+        val mouse = Mouse(object : EventHandler {
+            override fun <T : Event> callEvent(event: T) = false
+        })
+        mouse.pressButton(100, Type.RIGHT_CLICK)
+        mouse.unpressButton(Type.RIGHT_CLICK)
+        mouse.pressButton(Type.RIGHT_CLICK)
+        mouse.onGameLoop(Long.MAX_VALUE)
+        assertTrue(mouse.getButton(Type.RIGHT_CLICK).isPressed)
+    }
+
+    @Test fun `cleanup releases an already expired click still held by Minecraft`() {
+        val mouse = Mouse(object : EventHandler {
+            override fun <T : Event> callEvent(event: T) = false
+        })
+        mouse.pressButton(5, Type.RIGHT_CLICK)
+        assertTrue(mouse.next())
+        mouse.onGameLoop(Long.MAX_VALUE)
+        mouse.clearPendingClicks()
+        var releasedRight = false
+        while (mouse.next()) {
+            assertFalse(mouse.eventButtonState)
+            if (mouse.eventButtonType == Type.RIGHT_CLICK) releasedRight = true
+        }
+        assertTrue(releasedRight)
     }
 }

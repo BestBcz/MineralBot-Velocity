@@ -32,7 +32,7 @@ data class BotConfiguration(
     var predictionHorizon: Int = 5,
     var latencyDeviation: Int = 0,
     var pearlCooldown: Int = 15,
-    var rodCooldownTicks: Int = 9,
+    var rodCooldownTicks: Int = 8,
     var rodMinRange: Double = 2.2,
     var rodMaxRange: Double = 12.0,
     var rodCancelRange: Double = 3.05,
@@ -85,7 +85,7 @@ data class BotConfiguration(
             private var predictionHorizon: Int = 5
             private var latencyDeviation: Int = 0
             private var pearlCooldown: Int = 15
-            private var rodCooldownTicks: Int = 9
+            private var rodCooldownTicks: Int = 8
             private var rodMinRange: Double = 2.2
             private var rodMaxRange: Double = 12.0
             private var rodCancelRange: Double = 3.05

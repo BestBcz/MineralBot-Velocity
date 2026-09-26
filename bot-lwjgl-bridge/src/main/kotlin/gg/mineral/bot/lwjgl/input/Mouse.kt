@@ -24,7 +24,7 @@ class Mouse(eventHandler: EventHandler) : Mouse(eventHandler) {
     }
 
     override fun isButtonDown(i: Int): Boolean {
-        if (BotGlobalConfig.headless || BotGlobalConfig.control) return super.next()
+        if (BotGlobalConfig.headless || BotGlobalConfig.control) return super.isButtonDown(i)
 
         return org.lwjgl.input.Mouse.isButtonDown(i)
     }
@@ -111,4 +111,7 @@ class Mouse(eventHandler: EventHandler) : Mouse(eventHandler) {
 
             return org.lwjgl.input.Mouse.getEventButtonState()
         }
+
+    override val eventContextReset: Boolean
+        get() = (BotGlobalConfig.headless || BotGlobalConfig.control) && super.eventContextReset
 }

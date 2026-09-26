@@ -5,626 +5,149 @@ import gg.mineral.bot.ai.goal.type.PotionThrowGate
 import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
-import gg.mineral.bot.api.entity.living.player.ClientPlayer
-import gg.mineral.bot.api.entity.living.player.FakePlayer
-import gg.mineral.bot.api.entity.throwable.ClientPotion
 import gg.mineral.bot.api.event.Event
-import gg.mineral.bot.api.event.entity.EntityDestroyEvent
-import gg.mineral.bot.api.event.entity.EntityHurtEvent
 import gg.mineral.bot.api.goal.GoalDebugState
 import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.item.Item
 import gg.mineral.bot.api.inv.item.ItemStack
-import gg.mineral.bot.api.math.simulation.PlayerMotionSimulator
-import gg.mineral.bot.api.math.trajectory.Trajectory
-import gg.mineral.bot.api.math.trajectory.throwable.SplashPotionTrajectory
-import gg.mineral.bot.api.world.ClientWorld
-import gg.mineral.bot.api.world.block.Block
-import org.apache.commons.math3.analysis.UnivariateFunction
-import org.apache.commons.math3.optim.MaxEval
-import org.apache.commons.math3.optim.nonlinear.scalar.GoalType
-import org.apache.commons.math3.optim.univariate.BrentOptimizer
-import org.apache.commons.math3.optim.univariate.SearchInterval
-import org.apache.commons.math3.optim.univariate.UnivariateObjectiveFunction
-import org.apache.commons.math3.stat.regression.SimpleRegression
 
+/** Turn away, run with a level/slightly lowered view, and issue one use click. */
 class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
-    override val maxDuration: Long = 100
+    override val maxDuration: Long = 45
     override var startTime: Long = 0
-    override var executing: Boolean = false
+    override var executing = false
 
-    private val healthRegression: SimpleRegression = SimpleRegression()
-    private var lastPotTick = 0
-    private val perception = CombatPerception(clientInstance)
-
-    // Simplified state management
-    private enum class PotState {
-        PREPARING,      // Getting potion ready (inventory management)
-        AIMING,         // Calculating trajectory and aiming
-        THROWING,       // Actually throwing the potion
-        TRACKING,       // Tracking the thrown potion
-        COOLDOWN        // Waiting before next throw
-    }
-
+    private enum class PotState { PREPARING, AIMING, THROWING, RECOVERING }
     private var currentState = PotState.PREPARING
-    private var stateStartTick = 0
-    private var thrownPotionId: Int? = null
-    private var potionLandingX: Double = 0.0
-    private var potionLandingZ: Double = 0.0
-    private var healthBeforeThrow: Float = 0f
-    private var maxHealthAfterThrow: Float = 0f
-    private var splashApplied: Boolean = false
-    private var damagedAfterThrow: Boolean = false
-    private var potionGoneTick: Int = -1
-    private var plannedPitch: Float? = null
+    private val perception = CombatPerception(clientInstance)
+    private var lastPotTick = -40
     private var plannedYaw = 0f
+    private val plannedPitch = 8f // Positive Minecraft pitch looks down; never search for an upward arc.
     private var throwGate = PotionThrowGate()
-    private var existingPotionIds: Set<Int> = emptySet()
     private var throwTick = -1
+    private var countBeforeThrow = 0
+    private var healthBeforeThrow = 0f
 
     override fun shouldExecute(): Boolean {
-        // Cooldown between throws
-        if (clientInstance.currentTick - lastPotTick < 40) return false
-
-        val fakePlayer = clientInstance.fakePlayer
-        val inventory = fakePlayer.inventory
-
-        // Check if we have health pots
-        if (!inventory.contains { it: ItemStack -> isHealthPot(it) }) return false
-
+        if (clientInstance.currentTick - lastPotTick < 40 || getHealthPotSlot() == -1) return false
+        val health = clientInstance.fakePlayer.health
         val enemy = perception.nearestEnemy()
-        val distanceFromEnemies = enemy?.distance2D ?: Double.MAX_VALUE
-        val hasPressure = enemy?.pressuringSelf == true && distanceFromEnemies < 4.2
-
-        // Update health regression
-        healthRegression.addData(clientInstance.currentTick.toDouble(), fakePlayer.health.toDouble())
-
-        val health = min(
-            fakePlayer.health.toDouble(),
-            healthRegression.predict((clientInstance.currentTick + clientInstance.configuration.predictionHorizon).toDouble())
-        )
-
-        // Throw if health is low
-        return health < 12 && (health < 6 || distanceFromEnemies > 3.8 || !hasPressure)
+        return health < 12 && (health < 6 || enemy == null || enemy.distance2D > 3.8 || !enemy.pressuringSelf)
     }
 
     override fun onStart() {
         clientInstance.mouse.clearPendingClicks()
-        plannedPitch = null
-        throwGate = PotionThrowGate()
-        existingPotionIds = emptySet()
-        throwTick = -1
-        asyncTasks.clear()
-        currentState = PotState.PREPARING
-        stateStartTick = clientInstance.currentTick
-        thrownPotionId = null
-        healthBeforeThrow = clientInstance.fakePlayer.health
-        maxHealthAfterThrow = healthBeforeThrow
-        splashApplied = false
-        damagedAfterThrow = false
-            potionGoneTick = -1
-        // Move forward by default
+        clientInstance.keyboard.stopAll()
+        clientInstance.fakePlayer.stopUsingItem()
         pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
-        unpressKey(Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
+        unpressKey(Key.Type.KEY_Q, Key.Type.KEY_SPACE, Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
+        currentState = PotState.PREPARING
+        throwGate = PotionThrowGate()
+        throwTick = -1
+        healthBeforeThrow = clientInstance.fakePlayer.health
     }
 
     override fun onTick(tick: Tick) {
-        val fakePlayer = clientInstance.fakePlayer
-        val inventory = fakePlayer.inventory
-
-        // Update health regression
-        healthRegression.addData(clientInstance.currentTick.toDouble(), fakePlayer.health.toDouble())
-
-        // State timeout check - prevent getting stuck in any state
-        if (clientInstance.currentTick - stateStartTick > 60) {
-            this.finish()
-            return
-        }
+        val player = clientInstance.fakePlayer
+        val inventory = player.inventory
+        pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+        unpressKey(Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D, Key.Type.KEY_SPACE)
 
         when (currentState) {
-            PotState.PREPARING -> handlePreparing(tick, fakePlayer, inventory)
-            PotState.AIMING -> handleAiming(tick, fakePlayer, inventory)
-            PotState.THROWING -> handleThrowing(tick, fakePlayer, inventory)
-            PotState.TRACKING -> handleTracking(tick, fakePlayer)
-            PotState.COOLDOWN -> handleCooldown(tick)
-        }
-    }
-
-    private fun handlePreparing(tick: Tick, fakePlayer: FakePlayer, inventory: gg.mineral.bot.api.inv.Inventory) {
-        val healthSlot = getHealthPotSlot()
-
-        tick.finishIf("No Valid Health Pot Found", healthSlot == -1)
-
-        tick.prerequisite("In Hotbar", isItemReadyInHotbar(healthSlot, inventory)) {
-            moveItemToHotbar(healthSlot, inventory)
-        }
-
-        tick.prerequisite("Screen Closed", clientInstance.currentScreen == null) {
-            pressKey(10, Key.Type.KEY_ESCAPE)
-        }
-
-        tick.prerequisite(
-                "Correct Hotbar Slot Selected",
-                inventory.heldSlot == resolveHotbarSlot(healthSlot)
-        ) {
-            selectHotbarSlot(resolveHotbarSlot(healthSlot))
-        }
-
-        // Never aim or throw until the tracked swap is accepted and the expected potion is held.
-        val isHoldingHealth = inventory.heldItemStack?.let { isHealthPot(it) } == true
-        tick.execute {
-            if (isHoldingHealth) {
-                transitionTo(PotState.AIMING)
-            }
-        }
-    }
-
-    private fun handleAiming(tick: Tick, fakePlayer: FakePlayer, inventory: gg.mineral.bot.api.inv.Inventory) {
-        // Double check we still need to pot
-        tick.finishIf("Potting Not Needed", !shouldExecute())
-
-        // Make sure we're still holding the potion
-        val isHoldingHealth = inventory.heldItemStack?.let { isHealthPot(it) } == true
-        tick.finishIf("Not Holding Health Pot", !isHoldingHealth)
-
-        val closestEnemy = closestEnemy()
-        val distanceFromEnemies = distanceAwayFromEnemies()
-
-        // First, turn away from enemies
-        val targetYaw = angleAwayFromEnemies()
-        setMouseYaw(targetYaw)
-
-        // Check if we're facing away properly (within 30 degrees)
-        val yawDiff = kotlin.math.abs(angleDifference(fakePlayer.yaw, targetYaw))
-        if (yawDiff > 5) {
-            // Still turning, don't throw yet
-            return
-        }
-
-        // A mouse delta is applied later by the game loop. Never advance while the async
-        // calculation is pending, or before the resulting pitch is visible on the player.
-        if (plannedPitch == null) {
-            tick.executeAsync(0, {
-                minimizePitch(fakePlayer, closestEnemy) { it.airTimeTicks.toDouble() }
-            }) { plannedPitch = it.takeIf { pitch -> pitch.isFinite() } }
-            return
-        }
-        val targetPitch = plannedPitch ?: return
-        setMousePitch(targetPitch)
-        if (kotlin.math.abs(fakePlayer.pitch - targetPitch) > 2f) return
-
-        // Check throwing conditions
-        val atWall = isAtWall()
-        val goodDistance = distanceFromEnemies > 3.6
-        val criticalHealth = fakePlayer.health <= 6
-
-        // Calculate trajectory
-        val simulator = fakePlayer.motionSimulator().apply {
-            keyboard.pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
-            keyboard.unpressKey(Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
-            setMouseYaw(targetYaw)
-        }
-
-        val enemySimulator = closestEnemy?.motionSimulator()
-
-        val trajectory = object : SplashPotionTrajectory(
-            fakePlayer.world,
-            fakePlayer.x,
-            fakePlayer.y + fakePlayer.eyeHeight,
-            fakePlayer.z,
-            targetYaw,
-            fakePlayer.pitch, { x, y, z ->
-                // Check if hits a block and player is in splash range
-                val hitBlockInRange = hasHitBlock(fakePlayer.world, x, y, z) && run {
-                    val distance = simulator.distance3DToSq(x, y, z)
-                    if (distance < 16.0) 1.0 - sqrt(distance) / 4.0 > 0.5
-                    else false
+            PotState.PREPARING -> {
+                val slot = getHealthPotSlot()
+                tick.finishIf("No health potion", slot == -1 || player.health >= 12)
+                tick.prerequisite("Potion in hotbar", isItemReadyInHotbar(slot, inventory)) {
+                    moveItemToHotbar(slot, inventory)
                 }
-
-                // Check if directly hits player's bounding box
-                val hitsPlayer = run {
-                    val playerX = simulator.x
-                    val playerY = simulator.y
-                    val playerZ = simulator.z
-                    val width = 0.6 // Player width
-                    val height = 1.8 // Player height
-
-                    // Check if potion position is within player's bounding box
-                    x >= playerX - width / 2 && x <= playerX + width / 2 &&
-                            y >= playerY && y <= playerY + height &&
-                            z >= playerZ - width / 2 && z <= playerZ + width / 2
+                tick.prerequisite("Inventory closed", clientInstance.currentScreen == null) {
+                    pressKey(10, Key.Type.KEY_ESCAPE)
                 }
-
-                // Make sure enemy wouldn't be hit
-                val enemySafe = run {
-                    val distance = enemySimulator?.distance3DToSq(x, y, z) ?: Double.MAX_VALUE
-                    if (distance < 16.0) 1.0 - sqrt(distance) / 4.0 == 0.0
-                    else true
+                tick.prerequisite("Potion selected", inventory.heldSlot == resolveHotbarSlot(slot)) {
+                    selectHotbarSlot(resolveHotbarSlot(slot))
                 }
-
-                (hitBlockInRange || hitsPlayer) && enemySafe
-            }
-        ) {
-            override fun tick(): Trajectory.Result {
-                simulator.execute(50)
-                enemySimulator?.execute(50)
-                return super.tick()
-            }
-        }
-
-        // Decide whether to throw (increase compute limit for longer throws)
-        val trajectoryResult = trajectory.compute(200)
-        val validTrajectory = trajectoryResult == Trajectory.Result.VALID
-
-        // Store landing position for tracking
-        if (validTrajectory) {
-            potionLandingX = trajectory.x
-            potionLandingZ = trajectory.z
-        }
-
-        // Log for debugging
-        logger.debug("Trajectory: {}, distance: {}, atWall: {}", trajectoryResult, distanceFromEnemies, atWall)
-
-        // Critical health may relax spacing, but must never bypass trajectory/aim validation.
-        tick.execute {
-            if (validTrajectory && (atWall || goodDistance || criticalHealth)) {
-                plannedYaw = targetYaw
-                throwGate.arm(clientInstance.currentTick, targetYaw, targetPitch)
-                transitionTo(PotState.THROWING)
-            } else {
-                plannedPitch = null
-            }
-        }
-
-        // Don't stay in aiming state too long
-        if (clientInstance.currentTick - stateStartTick > 60) {
-            this.finish()
-        }
-    }
-
-    private fun handleThrowing(tick: Tick, fakePlayer: FakePlayer, inventory: gg.mineral.bot.api.inv.Inventory) {
-        // Keep the validated rotation until the server has spawned the projectile.
-        setMouseYaw(plannedYaw)
-        plannedPitch?.let { setMousePitch(it) }
-        if (!throwGate.issued) {
-            if (clientInstance.currentScreen != null || clientInstance.hasPendingInventoryTransaction ||
-                    inventory.heldItemStack?.let { isHealthPot(it) } != true) {
-                finish()
-                return
-            }
-            if (!throwGate.tryIssue(clientInstance.currentTick, fakePlayer.yaw, fakePlayer.pitch)) return
-            existingPotionIds = perception.potionProjectiles(16421).map { it.entity.entityId }.toSet()
-            throwTick = clientInstance.currentTick
-            pressButton(5, MouseButton.Type.RIGHT_CLICK)
-            return
-        }
-
-        // Look for the thrown potion entity from the current perception snapshot.
-        val nearbyPotion = perception.potionProjectiles(16421)
-            .filter { it.entity.entityId !in existingPotionIds && it.distance3D <= 3.0 }
-            .minByOrNull { it.distance3D }
-
-        if (nearbyPotion != null) {
-            thrownPotionId = nearbyPotion.entity.entityId
-            healthBeforeThrow = fakePlayer.health
-            maxHealthAfterThrow = fakePlayer.health
-            splashApplied = false
-            damagedAfterThrow = false
-            potionGoneTick = -1
-            transitionTo(PotState.TRACKING)
-        } else if (clientInstance.currentTick - throwTick > 10) {
-            // Couldn't find thrown potion after 10 ticks, assume it failed
-            transitionTo(PotState.COOLDOWN)
-        }
-    }
-
-    private fun handleTracking(tick: Tick, fakePlayer: FakePlayer) {
-        maxHealthAfterThrow = kotlin.math.max(maxHealthAfterThrow, fakePlayer.health)
-        if (!splashApplied && maxHealthAfterThrow > healthBeforeThrow + 0.05f) {
-            splashApplied = true
-        }
-
-        if (splashApplied) {
-            if (!damagedAfterThrow) {
-                setMouseYaw(angleTowardsEnemies())
-            }
-            transitionTo(PotState.COOLDOWN)
-            return
-        }
-
-        if (!damagedAfterThrow) {
-            // Keep running away until we confirm the potion has healed us.
-            setMouseYaw(angleAwayFromEnemies())
-        }
-
-        var potionTracked = false
-
-        // Track the thrown potion if we can find it
-        thrownPotionId?.let { potionId ->
-            val potion = perception.potionProjectiles()
-                .find { it.entity.entityId == potionId }
-
-            if (potion != null) {
-                potionTracked = true
-                    potionGoneTick = -1
-
-                // Create trajectory from current position with actual velocity
-                val trajectory = SplashPotionTrajectory.fromVelocity(
-                    fakePlayer.world,
-                    potion.x,
-                    potion.y,
-                    potion.z,
-                    potion.velocityX,
-                    potion.velocityY,
-                    potion.velocityZ
-                ) { x, y, z -> hasHitBlock(fakePlayer.world, x, y, z) }
-
-                // Calculate where it will land
-                if (trajectory.compute(100) == Trajectory.Result.VALID) {
-                    potionLandingX = trajectory.x
-                    potionLandingZ = trajectory.z
-                }
-
-                // If we got interfered (e.g. got hit), don't force away/back logic.
-                // Fall back to dynamic tracking based on potion landing.
-                if (damagedAfterThrow) {
-                    val x = potionLandingX - fakePlayer.x
-                    val z = potionLandingZ - fakePlayer.z
-
-                    val yaw = Math.toDegrees(-fastArcTan(x / z)).toFloat().let {
-                        when {
-                            z < 0.0 && x < 0.0 -> (90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-                            z < 0.0 && x > 0.0 -> (-90.0 + Math.toDegrees(fastArcTan(z / x))).toFloat()
-                            else -> it
-                        }
+                tick.execute {
+                    if (inventory.heldItemStack?.let(::isHealthPot) == true) {
+                        plannedYaw = perception.safeYawAwayFromNearestEnemy()
+                        currentState = PotState.AIMING
                     }
-
-                    setMouseYaw(yaw)
+                }
+            }
+            PotState.AIMING -> {
+                if (!readyToThrow() || player.health >= 12) { finish(); return }
+                setMouseYaw(plannedYaw)
+                setMousePitch(plannedPitch)
+                tick.execute {
+                    throwGate.arm(clientInstance.currentTick, plannedYaw, plannedPitch)
+                    currentState = PotState.THROWING
+                }
+            }
+            PotState.THROWING -> {
+                setMouseYaw(plannedYaw)
+                setMousePitch(plannedPitch)
+                if (!readyToThrow()) { finish(); return }
+                if (throwGate.tryIssue(clientInstance.currentTick, player.yaw, player.pitch)) {
+                    countBeforeThrow = countHealthPots()
+                    healthBeforeThrow = player.health
+                    throwTick = clientInstance.currentTick
+                    lastPotTick = throwTick
+                    pressButton(5, MouseButton.Type.RIGHT_CLICK)
+                    currentState = PotState.RECOVERING
+                }
+            }
+            PotState.RECOVERING -> {
+                // Keep running into the splash, without projectile simulation or async work.
+                val elapsed = clientInstance.currentTick - throwTick
+                if (elapsed <= 1) {
+                    setMouseYaw(plannedYaw)
+                    setMousePitch(plannedPitch)
+                    return
+                }
+                unpressButton(MouseButton.Type.RIGHT_CLICK)
+                setMouseYaw(plannedYaw)
+                if (player.health > healthBeforeThrow || elapsed >= 12) {
+                    // A click may be ignored while blocking or during a server correction.
+                    // Never replay it against a different held item.
+                    if (countHealthPots() >= countBeforeThrow) lastPotTick = clientInstance.currentTick
+                    if (restoreMelee()) finish()
                 }
             }
         }
-
-        if (!potionTracked) {
-            if (potionGoneTick == -1) {
-                potionGoneTick = clientInstance.currentTick
-            }
-
-            if (clientInstance.currentTick - potionGoneTick >= 4) {
-                transitionTo(PotState.COOLDOWN)
-                return
-            }
-        }
-
-        // Don't track for too long
-        if (clientInstance.currentTick - stateStartTick > 30) {
-            transitionTo(PotState.COOLDOWN)
-        }
     }
 
-    private fun handleCooldown(tick: Tick) {
-        // Just wait a bit before finishing
-        if (clientInstance.currentTick - stateStartTick > 5) {
-            this.finish()
-        }
+    private fun readyToThrow(): Boolean = clientInstance.currentScreen == null &&
+        !clientInstance.hasPendingInventoryTransaction &&
+        clientInstance.fakePlayer.inventory.heldItemStack?.let(::isHealthPot) == true
+
+    private fun restoreMelee(): Boolean {
+        val inventory = clientInstance.fakePlayer.inventory
+        val slot = findBestMeleeWeaponSlot(36) { inventory.getItemStackAt(it)?.attackDamage } ?: return true
+        if (!isItemReadyInHotbar(slot, inventory)) { moveItemToHotbar(slot, inventory); return false }
+        if (clientInstance.currentScreen != null) { pressKey(10, Key.Type.KEY_ESCAPE); return false }
+        if (inventory.heldSlot != slot) { selectHotbarSlot(slot); return false }
+        return true
     }
 
-    private fun transitionTo(newState: PotState) {
-        currentState = newState
-        stateStartTick = clientInstance.currentTick
-
-
-        // Update last pot tick when we start cooldown
-        if (newState == PotState.COOLDOWN) {
-            lastPotTick = clientInstance.currentTick
-        }
-
-        // Restore forward movement when leaving throwing state
-        if (newState != PotState.THROWING) {
-            unpressKey(Key.Type.KEY_S)
-            pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
-        }
+    private fun isHealthPot(stack: ItemStack) = stack.item.id == Item.POTION && stack.durability == 16421
+    private fun getHealthPotSlot() = (0..35).firstOrNull {
+        clientInstance.fakePlayer.inventory.getItemStackAt(it)?.let(::isHealthPot) == true
+    } ?: -1
+    private fun countHealthPots() = (0..35).sumOf {
+        clientInstance.fakePlayer.inventory.getItemStackAt(it)?.takeIf(::isHealthPot)?.count ?: 0
     }
 
-    override fun blocksContinuousAim(): Boolean = currentState != PotState.COOLDOWN
-
-    override fun blocksContinuousAttack(): Boolean = currentState != PotState.COOLDOWN
-
-    override fun blocksContinuousMovement(): Boolean = currentState != PotState.COOLDOWN
-
-    override fun debugSummary(): String {
-        return "state=$currentState,stateTicks=${clientInstance.currentTick - stateStartTick},lastPotAgo=${clientInstance.currentTick - lastPotTick},thrownPotionId=${thrownPotionId ?: -1},splashApplied=$splashApplied,damagedAfterThrow=$damagedAfterThrow,potionGoneTick=$potionGoneTick"
-    }
-
+    override fun blocksContinuousAim() = true
+    override fun blocksContinuousAttack() = true
+    override fun blocksContinuousMovement() = true
+    override fun debugSummary() = "state=$currentState,lastPotAgo=${clientInstance.currentTick - lastPotTick},throwTick=$throwTick"
     override fun onEnd() {
-        unpressButton(MouseButton.Type.RIGHT_CLICK)
-        plannedPitch = null
-        throwGate = PotionThrowGate()
-        asyncTasks.clear()
-        if (clientInstance.currentScreen != null)
-            pressKey(10, Key.Type.KEY_ESCAPE)
-        healthRegression.clear()
-        // Restore normal movement
-        unpressKey(Key.Type.KEY_S)
-        pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+        clientInstance.mouse.clearPendingClicks()
+        clientInstance.fakePlayer.stopUsingItem()
+        unpressKey(Key.Type.KEY_Q, Key.Type.KEY_SPACE, Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
+        if (clientInstance.currentScreen != null) pressKey(10, Key.Type.KEY_ESCAPE)
     }
-
-    override fun onEvent(event: Event): Boolean {
-        when (event) {
-            is EntityHurtEvent -> {
-                if (currentState == PotState.TRACKING && event.attackedEntity.uuid == clientInstance.fakePlayer.uuid) {
-                    damagedAfterThrow = true
-                }
-            }
-            is EntityDestroyEvent -> {
-                // Hold tracking briefly after the entity disappears so the splash can apply.
-                if (currentState == PotState.TRACKING &&
-                    event.destroyedEntity is ClientPotion &&
-                    event.destroyedEntity.entityId == thrownPotionId &&
-                    potionGoneTick == -1
-                ) {
-                    potionGoneTick = clientInstance.currentTick
-                }
-            }
-        }
-        return false
-    }
-
-    // Helper functions remain the same
-    private fun isHealthPot(itemStack: ItemStack): Boolean {
-        val item = itemStack.item
-        return item.id == Item.POTION && itemStack.durability == 16421
-    }
-
-    private fun getHealthPotSlot(): Int {
-        val fakePlayer = clientInstance.fakePlayer
-        val inventory = fakePlayer.inventory
-
-        for (i in 0..35) {
-            val itemStack = inventory.getItemStackAt(i) ?: continue
-            if (isHealthPot(itemStack)) {
-                return i
-            }
-        }
-        return -1
-    }
-
-    private fun angleAwayFromEnemies(): Float {
-        return perception.safeYawAwayFromNearestEnemy()
-    }
-
-    private fun angleTowardsEnemies(): Float {
-        return perception.yawTowardsNearestEnemy()
-    }
-
-    private fun distanceAwayFromEnemies(): Double {
-        return perception.distanceToNearestEnemy(horizontal = true)
-    }
-
-    private fun closestEnemy(): ClientPlayer? {
-        return perception.bestTarget()?.entity
-    }
-
-    private fun isAtWall(): Boolean {
-        val fakePlayer = clientInstance.fakePlayer
-        val world = fakePlayer.world
-
-        val posX = fakePlayer.x
-        val posY = fakePlayer.y + fakePlayer.eyeHeight
-        val posZ = fakePlayer.z
-        val yaw = fakePlayer.yaw
-        val pitch = 0f
-
-        val checkDistance = 1.0
-        val dir = vectorForRotation(pitch, yaw)
-        val checkX = posX + dir[0] * checkDistance
-        val checkY = posY + dir[1] * checkDistance
-        val checkZ = posZ + dir[2] * checkDistance
-
-        val block = world.getBlockAt(checkX, checkY, checkZ)
-        return block.id != Block.AIR
-    }
-
-    private fun minimizePitch(
-        fakePlayer: FakePlayer,
-        enemy: ClientPlayer?,
-        valueFunction: (SplashPotionTrajectory) -> Double
-    ): Float {
-        val objective = UnivariateFunction { pitch ->
-            val simulator = fakePlayer.motionSimulator()
-            simulator.keyboard.pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
-            simulator.keyboard.unpressKey(Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
-            // Use the angle away from enemies for trajectory calculation
-            val awayYaw = angleAwayFromEnemies()
-            simulator.setMouseYaw(awayYaw)
-            val enemySimulator = enemy?.motionSimulator()
-            val trajectory = object : SplashPotionTrajectory(
-                fakePlayer.world,
-                fakePlayer.x,
-                fakePlayer.y + fakePlayer.eyeHeight,
-                fakePlayer.z,
-                awayYaw,
-                pitch.toFloat(), { x, y, z ->
-                    // Check if hits a block and player is in splash range
-                    val hitBlockInRange = hasHitBlock(fakePlayer.world, x, y, z) && run {
-                        val distance = simulator.distance3DToSq(x, y, z)
-                        if (distance < 16.0) 1.0 - sqrt(distance) / 4.0 > 0.5
-                        else false
-                    }
-
-                    // Check if directly hits player's bounding box
-                    val hitsPlayer = run {
-                        val playerX = simulator.x
-                        val playerY = simulator.y
-                        val playerZ = simulator.z
-                        val width = 0.6 // Player width
-                        val height = 1.8 // Player height
-
-                        // Check if potion position is within player's bounding box
-                        x >= playerX - width / 2 && x <= playerX + width / 2 &&
-                                y >= playerY && y <= playerY + height &&
-                                z >= playerZ - width / 2 && z <= playerZ + width / 2
-                    }
-
-                    // Make sure enemy wouldn't be hit
-                    val enemySafe = run {
-                        val distance = enemySimulator?.distance3DToSq(x, y, z) ?: Double.MAX_VALUE
-                        if (distance < 16.0) 1.0 - sqrt(distance) / 4.0 == 0.0
-                        else true
-                    }
-
-                    (hitBlockInRange || hitsPlayer) && enemySafe
-                }
-            ) {
-                override fun tick(): Trajectory.Result {
-                    simulator.execute(50)
-                    enemySimulator?.execute(50)
-                    return super.tick()
-                }
-            }
-            if (trajectory.compute(100) === Trajectory.Result.VALID)
-                valueFunction.invoke(trajectory)
-            else
-                Double.MAX_VALUE
-        }
-
-        val optimizer = BrentOptimizer(1e-10, 1e-14)
-
-        val result = optimizer.optimize(
-            MaxEval(180),
-            UnivariateObjectiveFunction(objective),
-            GoalType.MINIMIZE,
-            SearchInterval(-90.0, 90.0)
-        )
-
-        // NOTE: result.point is the pitch angle argument; result.value is only the objective score.
-        return result.point.toFloat()
-    }
-
-    private fun hasHitBlock(world: ClientWorld?, x: Double, y: Double, z: Double): Boolean {
-        val xTile = floor(x)
-        val yTile = floor(y)
-        val zTile = floor(z)
-        val block = world?.getBlockAt(xTile, yTile, zTile)
-
-        if (world != null && block != null && block.id != Block.AIR) return block.getCollisionBoundingBox(
-            world,
-            xTile,
-            yTile,
-            zTile
-        )?.isVecInside(x, y, z) ?: false
-
-        return false
-    }
-
-    // Extension functions for adjusting the bot's aim
-    private fun PlayerMotionSimulator.setMouseYaw(yaw: Float) {
-        val rotYaw = this.yaw
-        mouse.changeYaw(angleDifference(rotYaw, yaw))
-    }
-
-    public override fun onGameLoop() {
-        // No changes made in the game loop.
-    }
+    override fun onEvent(event: Event) = false
+    override fun onGameLoop() {}
 }

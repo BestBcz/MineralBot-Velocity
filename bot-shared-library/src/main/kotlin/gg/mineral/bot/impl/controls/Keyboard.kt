@@ -17,6 +17,7 @@ open class Keyboard(private val eventHandler: EventHandler) : gg.mineral.bot.api
     private var iterator: MutableIterator<Log>? = null
 
     private val scheduledTasks = Object2LongOpenHashMap<Runnable>()
+    private val keyVersions = LongArray(keys.size)
 
     fun onGameLoop(time: Long) {
         scheduledTasks.keys.removeIf { runnable: Runnable ->
@@ -63,10 +64,11 @@ open class Keyboard(private val eventHandler: EventHandler) : gg.mineral.bot.api
 
             logger.debug("Pressing key: {} for {}ms", type, durationMillis)
             key.isPressed = true
+            val version = ++keyVersions[type.ordinal]
             if (currentLog != null) logs.add(currentLog)
             currentLog = Log(type, true)
             if (durationMillis > 0 && durationMillis < Int.MAX_VALUE) schedule(
-                { unpressKey(type) },
+                { if (keyVersions[type.ordinal] == version) unpressKey(type) },
                 durationMillis.toLong()
             )
         }
@@ -84,11 +86,12 @@ open class Keyboard(private val eventHandler: EventHandler) : gg.mineral.bot.api
 
             logger.debug("Unpressing key: {} for {}ms", type, durationMillis)
             key.isPressed = false
+            val version = ++keyVersions[type.ordinal]
             if (currentLog != null) logs.add(currentLog)
             currentLog = Log(type, false)
 
             if (durationMillis > 0 && durationMillis < Int.MAX_VALUE) schedule(
-                { pressKey(type) },
+                { if (keyVersions[type.ordinal] == version) pressKey(type) },
                 durationMillis.toLong()
             )
         }
@@ -130,8 +133,17 @@ open class Keyboard(private val eventHandler: EventHandler) : gg.mineral.bot.api
         get() = eventLog?.pressed == true
 
     override fun stopAll() {
-        unpressKey(Int.MAX_VALUE, *gg.mineral.bot.api.controls.Key.Type.entries.toTypedArray())
         scheduledTasks.clear()
+        logs.clear()
+        currentLog = null
+        eventLog = null
+        iterator = null
+        // Cleanup must bypass goal cancellation and discard queued drops/hotbar presses.
+        keys.forEach {
+            it.isPressed = false
+            ++keyVersions[it.type.ordinal]
+            if (it.type.keyCode > 0) logs.add(Log(it.type, false))
+        }
     }
 
     @JvmRecord
