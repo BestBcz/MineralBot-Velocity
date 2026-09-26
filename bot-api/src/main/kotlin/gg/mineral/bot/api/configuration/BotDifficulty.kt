@@ -158,6 +158,12 @@ enum class BotDifficulty(
         configuration.pearlHealthThreshold = pearlHealthThreshold
         configuration.strafeActivationRange = strafeActivationRange
         configuration.potAccuracy = potAccuracy
+        configuration.healthPotAimWaitTicks = when (this) {
+            NOOB -> 16
+            NORMAL -> 12
+            PRO -> 6
+        }
+        configuration.healthAdvantagePressureEnabled = this != NOOB
     }
 
     companion object {

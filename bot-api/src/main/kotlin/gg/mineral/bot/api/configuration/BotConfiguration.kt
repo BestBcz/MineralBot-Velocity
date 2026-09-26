@@ -45,7 +45,9 @@ data class BotConfiguration(
     var disableEntityCollisions: Boolean = true,
     var friendlyUUIDs: MutableSet<UUID> = BotAPI.INSTANCE.collections().newSet(),
     var potAccuracy: Double = 0.5,
-    var velocityInputRecoveryEnabled: Boolean = false
+    var velocityInputRecoveryEnabled: Boolean = false,
+    var healthPotAimWaitTicks: Int = 12,
+    var healthAdvantagePressureEnabled: Boolean = true
 ) {
     val fullUsername: String
         get() = "$usernamePrefix$username$usernameSuffix"
