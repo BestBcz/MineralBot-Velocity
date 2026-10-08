@@ -17,6 +17,8 @@ import gg.mineral.bot.api.world.block.Block
 class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance) {
     private val perception = CombatPerception(clientInstance)
     private val navigator = clientInstance.navigationContext?.let { gg.mineral.bot.ai.navigation.CombatNavigator(it) }
+    private val navigationProtection = gg.mineral.bot.ai.navigation.CombatNavigationProtection { timeMillis() }
+    private var lastNavigationLogTick = -200
     private var target: ClientPlayer? = null
 
     private val meanDelay = (1000 / clientInstance.configuration.averageCps).toLong()
@@ -173,7 +175,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val distance = fakePlayer.distance3DTo(target)
 
         val routeYaw = navigator?.steeringYaw
-        if (navigator?.ownsMovement == true && routeYaw != null && (distance > 6.0 || navigator.preparingJump)) {
+        if (navigator?.ownsMovement == true && routeYaw != null) {
             setMouseYaw(routeYaw)
             setMousePitch(optimalAngles[0])
             return
@@ -631,11 +633,13 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     }
 
     override fun onEvent(event: Event): Boolean {
+        if (event is gg.mineral.bot.api.event.entity.EntityHealthUpdateEvent) navigationProtection.observeHealth(event.health)
         if (event is EntityHurtEvent) return onEntityHurt(event)
         return false
     }
 
     fun onEntityHurt(event: EntityHurtEvent): Boolean {
+        if (event.attackedEntity.uuid == clientInstance.fakePlayer.uuid) navigationProtection.hurt()
         if (clientInstance.currentTick - lastSprintResetTick < 9) return false
 
         val entity = event.attackedEntity
@@ -676,6 +680,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val target = this.target
         val fakePlayer = clientInstance.fakePlayer
         val snapshot = perception.snapshot()
+        navigationProtection.observeHealth(fakePlayer.health)
         expireHitWindow()
         if (navigator != null) {
             val remembered = target == null && clientInstance.currentTick - lastSeenTargetTick <= 16
@@ -685,7 +690,16 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             val navigating = navigator.update(clientInstance.currentTick, navigationTarget,
                 if (remembered) 0.5 else clientInstance.configuration.reach + 0.35, clearSight,
                 !clientInstance.hasActiveSporadicGoal &&
-                    (!clientInstance.blocksContinuousInventory || navigator.ownsInteraction) && !clientInstance.blocksContinuousAim)
+                    (!clientInstance.blocksContinuousInventory || navigator.ownsInteraction) && !clientInstance.blocksContinuousAim,
+                gg.mineral.bot.api.navigation.NavigationCombatState(navigationProtection.active,
+                    target?.uuid ?: clientInstance.matchTargetUuid, preserveOpenMovement = true))
+            if (logger.isDebugEnabled && clientInstance.currentTick-lastNavigationLogTick >= 200) {
+                lastNavigationLogTick = clientInstance.currentTick
+                logger.debug("Navigation: state={} firstMoveTicks={} firstRouteTicks={} searches={} searchMs={} action={} failures={} lastFailure={}",
+                    navigator.diagnostic, navigator.firstMovementDelayTicks, navigator.firstRouteDelayTicks, navigator.searchesStarted,
+                    navigator.searchNanos/1e6, clientInstance.navigationContext?.actionDiagnostic,
+                    navigator.failedActions, navigator.lastActionFailure)
+            }
             if (navigating) {
                 strafeDirection = 0
                 strafeLockedUntilTick = -1

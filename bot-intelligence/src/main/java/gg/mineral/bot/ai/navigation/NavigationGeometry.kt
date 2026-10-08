@@ -5,7 +5,14 @@ import kotlin.math.*
 
 /** All positions are feet positions. Collision shapes stay in world coordinates. */
 internal class NavigationGeometry(val world: NavigationWorld, val width: Double, val height: Double) {
-    fun block(p: BlockPos, edits: Map<BlockPos, NavBlock>) = edits[p] ?: world.block(p)
+    private var cachedRevision = world.revision
+    private val blocks = HashMap<BlockPos, NavBlock?>()
+    fun block(p: BlockPos, edits: Map<BlockPos, NavBlock>): NavBlock? {
+        edits[p]?.let { return it }
+        if (cachedRevision != world.revision) { blocks.clear(); cachedRevision = world.revision }
+        if (!blocks.containsKey(p)) blocks[p] = world.block(p)
+        return blocks[p]
+    }
     fun body(p: NavVec): NavBox {
         val r = width / 2 - 0.001
         return NavBox(p.x-r, p.y+0.001, p.z-r, p.x+r, p.y+height, p.z+r)
@@ -21,7 +28,16 @@ internal class NavigationGeometry(val world: NavigationWorld, val width: Double,
                 }
         return result
     }
-    fun clear(p: NavVec, edits: Map<BlockPos, NavBlock>) = obstacles(p, edits)?.isEmpty() == true
+    fun clear(p: NavVec, edits: Map<BlockPos, NavBlock>): Boolean {
+        val box = body(p)
+        for (x in floor(box.minX).toInt()..floor(box.maxX).toInt())
+            for (y in max(0, floor(box.minY).toInt()-1)..floor(box.maxY).toInt())
+                for (z in floor(box.minZ).toInt()..floor(box.maxZ).toInt()) {
+                    val b = block(BlockPos(x,y,z), edits) ?: return false
+                    if (b.hazardous || b.boxes.any { it.intersects(box) }) return false
+                }
+        return true
+    }
     fun water(p: NavVec, edits: Map<BlockPos, NavBlock>) = block(p.block, edits)?.water == true ||
         block(BlockPos.at(p.x,p.y+0.4,p.z), edits)?.water == true ||
         block(BlockPos.at(p.x,p.y-0.2,p.z), edits)?.water == true
@@ -62,6 +78,7 @@ internal class NavigationGeometry(val world: NavigationWorld, val width: Double,
         val steps = max(1,ceil(length/0.12).toInt()); var y = from.y
         for (i in 1..steps) {
             val t = i.toDouble()/steps; val x = from.x+(to.x-from.x)*t; val z=from.z+(to.z-from.z)*t
+            if (water(NavVec(x,y,z),edits)) return false
             val top = surfaces(x,z,y,edits,0.6).firstOrNull { clear(NavVec(x,it,z),edits) } ?: return false
             if (y-top > 3.001) return false
             // Check the vertical step space before moving horizontally.

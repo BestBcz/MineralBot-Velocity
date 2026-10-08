@@ -23,6 +23,20 @@ import kotlin.math.*
 
 class MinecraftNavigationContext(private val instance: ClientInstance) : NavigationContext, NavigationWorld {
     override val world: NavigationWorld get()=this
+    override val searchBudget get()=gg.mineral.bot.ai.navigation.SharedNavigationBudget.PROCESS
+    override val actionOverheadTicks get()=4.0+instance.latency.coerceAtLeast(0)/50.0*2
+    private enum class Phase { AUTHORIZE, SLOT, POSITION, AIM, EXECUTE, CONFIRM, LAND }
+    private var phase=Phase.AUTHORIZE
+    private var phaseTick=0
+    private var failureReason=""
+    override val actionDiagnostic get()=if(status==ActionStatus.FAILED) failureReason else phase.name
+    private var tower: TowerPlacement?=null
+    private var supportPos: BlockPos?=null
+    private var supportFace=-1
+    private var expectedDigTicks=0
+    private var buoyancyHeld=false
+    private val toolCache=HashMap<Pair<Int,Float>,Pair<Int,Double>>()
+    private var toolSignature=0
     private val permissions=NavigationPermissionStore()
     private val payloads=ConcurrentLinkedQueue<ByteArray>()
     private val pendingBinding=AtomicReference<String?>()
@@ -41,6 +55,7 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
     private var ownsSneak=false
     private var ownsJump=false
     private var ownsMouse=false
+    private var ownsAim=false
     private val movementTypes=setOf(Key.Type.KEY_W,Key.Type.KEY_A,Key.Type.KEY_S,Key.Type.KEY_D,Key.Type.KEY_SPACE,Key.Type.KEY_LCONTROL)
     private val orphanedSwaps=mutableSetOf<Long>()
     override val revision: Long get()=blockRevision
@@ -65,7 +80,22 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         val old=permissions.permissions
         while(true) permissions.receive(payloads.poll()?:break)
         if(old?.copy(revision=0)!=permissions.permissions?.copy(revision=0)) { blocks.clear(); blockRevision++ }
-        if(cachedTick!=instance.currentTick) { blocks.clear(); cachedTick=instance.currentTick }
+        if(cachedTick!=instance.currentTick) {
+            cachedTick=instance.currentTick
+            val p=instance.thePlayer
+            var signature=1
+            if(p!=null) {
+                for(slot in 0..35) {
+                    val stack=p.vanillaInventory.getStackInSlot(slot)
+                    signature=31*signature+(stack?.let { System.identityHashCode(it.item)+it.itemDamage*31+it.stackSize*997+(it.tagCompound?.hashCode()?:0) }?:0)
+                }
+                signature=31*signature+if(p.isInWater) 1 else 0
+                signature=31*signature+if(p.onGround) 1 else 0
+                signature=31*signature+(p.getActivePotionEffect(Potion.digSpeed)?.amplifier?:-1)
+                signature=31*signature+(p.getActivePotionEffect(Potion.digSlowdown)?.amplifier?:-1)
+            }
+            if(signature!=toolSignature) { toolSignature=signature; toolCache.clear() }
+        }
     }
     override fun state(): NavigationState {
         pump(); val p=instance.thePlayer ?: return NavigationState(NavVec(0.0,0.0,0.0),0f,false,false,300)
@@ -74,7 +104,7 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
             b.maxX-b.minX,b.maxY-b.minY,NavVec(p.motionX,p.motionY,p.motionZ))
     }
     override fun block(pos: BlockPos): NavBlock? {
-        if(blocks.containsKey(pos)) return blocks[pos]
+        if(blocks.containsKey(pos)) return withTool(pos,blocks[pos])
         val w=instance.theWorld ?: return null
         if(!w.blockExists(pos.x,pos.y,pos.z)) return null
         val b=w.getBlock(pos.x,pos.y,pos.z); val id=Block.getIdFromBlock(b)
@@ -92,8 +122,25 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
             b.velocityToAddToEntity(w,pos.x,pos.y,pos.z,instance.thePlayer,v)
             NavVec(v.xCoord,v.yCoord,v.zCoord)
         } else NavVec(0.0,0.0,0.0)
-        val tool=if(permissions.permissions?.canBreak(pos,id)==true && boxes.isNotEmpty()) tool(pos,b) else (-1 to Double.POSITIVE_INFINITY)
-        return NavBlock(id,meta,boxes,fluid,id in setOf(10,11,51,81),b.material.isReplaceable || id==0 || fluid,flow,tool.second,tool.first).also { blocks[pos]=it }
+        val result=NavBlock(id,meta,boxes,fluid,id in setOf(10,11,51,81),b.material.isReplaceable || id==0 || fluid,flow)
+        if(blocks.size>=16384) blocks.clear()
+        blocks[pos]=result
+        return withTool(pos,result)
+    }
+    private fun withTool(pos: BlockPos,block: NavBlock?): NavBlock? {
+        if(block==null || block.boxes.isEmpty() || permissions.permissions?.canBreak(pos,block.id)!=true) return block
+        val b=instance.theWorld?.getBlock(pos.x,pos.y,pos.z)?:return block
+        val key=block.id to b.getBlockHardness(instance.theWorld,pos.x,pos.y,pos.z)
+        val result=toolCache.getOrPut(key) { tool(pos,b) }
+        return block.copy(breakTicks=result.second,toolSlot=result.first)
+    }
+    override fun maintainBuoyancy(inWater: Boolean) {
+        if(inWater) {
+            instance.keyboard.pressKey(Key.Type.KEY_SPACE)
+            instance.keyboard.unpressKey(Key.Type.KEY_LCONTROL)
+            instance.thePlayer?.setSprinting(false)
+        } else if(buoyancyHeld) instance.keyboard.unpressKey(Key.Type.KEY_SPACE)
+        buoyancyHeld=inWater
     }
     private fun tool(pos: BlockPos,b: Block): Pair<Int,Double> {
         val p=instance.thePlayer ?: return -1 to Double.POSITIVE_INFINITY
@@ -138,8 +185,14 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         pump()
         if(this.action==action && status !in setOf(ActionStatus.IDLE,ActionStatus.FAILED)) return status
         cancelAction(); this.action=action; startedTick=instance.currentTick; actionId++
-        val payload=permissions.check(actionId,action) ?: return ActionStatus.FAILED.also { status=it }
-        instance.netHandler?.addToSendQueue(C17PacketCustomPayload("MineralBot",payload)) ?: return ActionStatus.FAILED.also { status=it }
+        phase=Phase.AUTHORIZE; phaseTick=startedTick; failureReason=""; lastActionTick=-1
+        expectedDigTicks=if(action.kind==BlockActionKind.BREAK) block(action.pos)?.breakTicks?.takeIf { it.isFinite() }?.toInt()?.coerceIn(0,200)?:0 else 0
+        val p=instance.thePlayer
+        if(action.kind==BlockActionKind.PLACE && (action.placement==PlacementStyle.TOWER ||
+                action.placement==PlacementStyle.AUTO && p!=null && abs(action.pos.x+0.5-p.posX)<0.5 && abs(action.pos.z+0.5-p.posZ)<0.5 && action.pos.y+1>p.boundingBox.minY+0.05))
+            tower=TowerPlacement(action.pos.y+1.0)
+        val payload=permissions.check(actionId,action) ?: return ActionStatus.FAILED.also { fail("permissions unavailable") }
+        instance.netHandler?.addToSendQueue(C17PacketCustomPayload("MineralBot",payload)) ?: return ActionStatus.FAILED.also { fail("not connected") }
         status=ActionStatus.WAITING; return status
     }
     override fun actionStatus()=status
@@ -151,12 +204,21 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
     private fun prepareSlot(a: BlockAction): Boolean {
         val p=instance.thePlayer?:return false
         var slot=selectedSlot.takeIf { it>=0 }?:a.slot
-        if(slot !in 0..35) { status=ActionStatus.FAILED; return false }
+        if(a.kind==BlockActionKind.PLACE && swapToken==null) {
+            fun matches(i: Int): Boolean = p.vanillaInventory.getStackInSlot(i)?.let {
+                it.item is ItemBlock && Block.getIdFromBlock(Block.getBlockFromItem(it.item))==a.blockId && it.itemDamage==a.metadata && it.stackSize>0
+            }==true
+            if(slot !in 0..35 || !matches(slot)) {
+                slot=(0..35).firstOrNull { matches(it) }?:-1
+                selectedSlot=slot
+            }
+        }
+        if(slot !in 0..35) { fail("no matching inventory slot"); return false }
         swapToken?.let { token ->
             when(instance.inventoryTransactionStatus(token)) {
                 InventoryTransactionStatus.PENDING -> return false
                 InventoryTransactionStatus.ACCEPTED -> { instance.forgetInventoryTransaction(token); swapToken=null; selectedSlot=8; slot=8 }
-                else -> { instance.forgetInventoryTransaction(token); swapToken=null; status=ActionStatus.FAILED; return false }
+                else -> { instance.forgetInventoryTransaction(token); swapToken=null; fail("inventory swap rejected"); return false }
             }
         }
         if(slot>8) {
@@ -171,85 +233,171 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         }
         val stack=p.vanillaInventory.getStackInSlot(slot)
         if(a.kind==BlockActionKind.PLACE && (stack==null || Block.getIdFromBlock(Block.getBlockFromItem(stack.item))!=a.blockId || stack.itemDamage!=a.metadata || stack.stackSize<=0)) {
-            status=ActionStatus.FAILED; return false
+            fail("building material changed"); return false
         }
         return true
     }
+    private fun phase(next: Phase) {
+        if(phase!=next) { phase=next; phaseTick=instance.currentTick }
+    }
+    private fun faceCenter(pos: BlockPos,face: Int): Vec3 {
+        val box=block(pos)?.boxes?.maxByOrNull { (it.maxX-it.minX)*(it.maxY-it.minY)*(it.maxZ-it.minZ) }
+        val center=Vec3.createVectorHelper(box?.let { (it.minX+it.maxX)/2 }?:pos.x+0.5,
+            box?.let { (it.minY+it.maxY)/2 }?:pos.y+0.5,box?.let { (it.minZ+it.maxZ)/2 }?:pos.z+0.5)
+        when(face) {
+            1 -> center.yCoord=box?.maxY?:pos.y+1.0
+            5 -> center.xCoord=box?.maxX?:pos.x+1.0
+            4 -> center.xCoord=box?.minX?:pos.x.toDouble()
+            3 -> center.zCoord=box?.maxZ?:pos.z+1.0
+            2 -> center.zCoord=box?.minZ?:pos.z.toDouble()
+        }
+        return center
+    }
+    private fun steerTo(x: Double,z: Double) {
+        val p=instance.thePlayer?:return
+        val angle=atan2(-(x-p.posX),z-p.posZ)-Math.toRadians(p.rotationYaw.toDouble())
+        val keys=mutableSetOf<Key.Type>()
+        if(cos(angle)>0.38)keys.add(Key.Type.KEY_W)
+        if(cos(angle)<-0.38)keys.add(Key.Type.KEY_S)
+        if(sin(angle)<-0.38)keys.add(Key.Type.KEY_A)
+        if(sin(angle)>0.38)keys.add(Key.Type.KEY_D)
+        move(keys)
+    }
     override fun tickAction() {
-        pump(); if(lastActionTick==instance.currentTick) return; lastActionTick=instance.currentTick
+        pump()
+        if(lastActionTick==instance.currentTick) return
+        lastActionTick=instance.currentTick
         val a=action?:return
         if(status !in setOf(ActionStatus.WAITING,ActionStatus.EXECUTING)) return
-        if(permissions.permissions?.building!=true || instance.currentTick-startedTick>300+instance.latency/50) { fail(); return }
+        val lag=ceil(instance.latency.coerceAtLeast(0)/50.0).toInt()*2
+        val phaseLimit=40+lag+if(phase==Phase.EXECUTE && a.kind==BlockActionKind.BREAK) expectedDigTicks else 0
+        if(permissions.permissions?.building!=true) { fail("permissions unavailable"); return }
+        if(instance.currentTick-startedTick>300+lag || instance.currentTick-phaseTick>phaseLimit) {
+            fail("timeout in "+phase.name); return
+        }
         val reply=permissions.reply?.takeIf { it.first==actionId }?.second
-        if(reply==0) { fail(); return }
+        if(reply==0) { fail("server rejected operation"); return }
+        val p=instance.thePlayer?:return
+        val w=instance.theWorld?:return
         if(reply==2) {
             val b=block(a.pos)
-            if(b!=null && (if(a.kind==BlockActionKind.BREAK) b.id==0 || b.replaceable else b.id==a.blockId && b.metadata==a.metadata)) {
-                release(); status=ActionStatus.CONFIRMED
+            val matches=b!=null && if(a.kind==BlockActionKind.BREAK) b.id==0 || b.replaceable
+                                  else b.id==a.blockId && b.metadata==a.metadata
+            if(matches) {
+                release(); move(emptySet())
+                if(tower?.update(state(),clicked,true)==TowerPlacement.Motion.LANDING) { phase(Phase.LAND); return }
+                status=ActionStatus.CONFIRMED
             }
             return
         }
-        if(reply!=1 || !prepareSlot(a)) return
-        val p=instance.thePlayer?:return
-        val w=instance.theWorld?:return
-        val pos=a.pos
-        var support=pos; var face=-1
-        if(a.kind==BlockActionKind.PLACE) {
-            val candidates=listOf(pos.offset(0,-1,0) to 1,pos.offset(-1,0,0) to 5,pos.offset(1,0,0) to 4,pos.offset(0,0,-1) to 3,pos.offset(0,0,1) to 2)
-            val candidate=candidates.firstOrNull { block(it.first)?.boxes?.isNotEmpty()==true }?:run { fail(); return }
-            support=candidate.first; face=candidate.second
-            if(pos.y+1>p.boundingBox.minY+0.05 && abs(pos.x+0.5-p.posX)<0.5 && abs(pos.z+0.5-p.posZ)<0.5) {
-                instance.keyboard.pressKey(Key.Type.KEY_SPACE); ownsJump=true; return
-            }
+        if(reply!=1) return
+        if(phase==Phase.AUTHORIZE) phase(Phase.SLOT)
+        // Advance flight even if a ray or inventory preparation is temporarily unavailable.
+        val towerMotion=if(tower!=null && phase==Phase.EXECUTE && !clicked) tower!!.update(state(),false,false) else null
+        if(towerMotion==TowerPlacement.Motion.FAILED) { fail("missed tower placement window"); return }
+        if(ownsJump && towerMotion!=null && towerMotion!=TowerPlacement.Motion.TAKEOFF) {
             instance.keyboard.unpressKey(Key.Type.KEY_SPACE); ownsJump=false
-            instance.keyboard.pressKey(Key.Type.KEY_LSHIFT); ownsSneak=true
-            if(pos.y+1<=p.boundingBox.minY+0.05 && support.y==pos.y && !clicked) {
-                // Sneak to the lip so the outside support face becomes visible for bridging.
-                val sx=support.x+0.5+(pos.x-support.x)*0.65
-                val sz=support.z+0.5+(pos.z-support.z)*0.65
-                if(hypot(sx-p.posX,sz-p.posZ)>0.09) {
-                    val angle=atan2(-(sx-p.posX),sz-p.posZ)-Math.toRadians(p.rotationYaw.toDouble())
-                    val keys=mutableSetOf<Key.Type>()
-                    if(cos(angle)>0.38)keys.add(Key.Type.KEY_W)
-                    if(cos(angle)< -0.38)keys.add(Key.Type.KEY_S)
-                    if(sin(angle)< -0.38)keys.add(Key.Type.KEY_A)
-                    if(sin(angle)>0.38)keys.add(Key.Type.KEY_D)
-                    move(keys); return
-                }
-            }
-            move(emptySet())
         }
-        val center=Vec3.createVectorHelper(support.x+0.5,support.y+0.5,support.z+0.5)
-        if(face==1) center.yCoord=support.y+1.0
-        if(face==5) center.xCoord=support.x+1.0
-        if(face==4) center.xCoord=support.x.toDouble()
-        if(face==3) center.zCoord=support.z+1.0
-        if(face==2) center.zCoord=support.z.toDouble()
-        // The legacy client's render ray starts at posY (already includes its eye offset).
-        val eyeY=p.posY
-        val dx=center.xCoord-p.posX; val dy=center.yCoord-eyeY; val dz=center.zCoord-p.posZ
-        if(sqrt(dx*dx+dy*dy+dz*dz)>4.5) { fail(); return }
-        val yaw=Math.toDegrees(atan2(-dx,dz)).toFloat(); val pitch=-Math.toDegrees(atan2(dy,hypot(dx,dz))).toFloat()
-        instance.mouse.changeYaw(wrap(yaw-p.rotationYaw)); instance.mouse.changePitch(pitch-p.rotationPitch)
-        val hit=instance.objectMouseOver
-        if(hit?.typeOfHit!=MovingObjectPosition.MovingObjectType.BLOCK || hit.blockX!=support.x || hit.blockY!=support.y || hit.blockZ!=support.z || (face>=0 && hit.sideHit!=face)) return
-        status=ActionStatus.EXECUTING
-        if(a.kind==BlockActionKind.BREAK) {
+        // A click is issued once. Confirmation waits must never re-enter jump or edge positioning.
+        if(clicked) { phase(Phase.CONFIRM); return }
+        if(!prepareSlot(a)) return
+        if(phase==Phase.SLOT) phase(Phase.POSITION)
+
+        val pos=a.pos
+        var support=pos
+        var face=-1
+        if(a.kind==BlockActionKind.PLACE) {
+            if(supportPos==null) {
+                val candidates=listOf(pos.offset(0,-1,0) to 1,pos.offset(-1,0,0) to 5,
+                    pos.offset(1,0,0) to 4,pos.offset(0,0,-1) to 3,pos.offset(0,0,1) to 2)
+                val candidate=candidates.filter { block(it.first)?.boxes?.isNotEmpty()==true }
+                    .minByOrNull { val center=faceCenter(it.first,it.second)
+                        (center.xCoord-p.posX).pow(2)+(center.yCoord-p.posY).pow(2)+(center.zCoord-p.posZ).pow(2) }
+                    ?:run { fail("no support face"); return }
+                supportPos=candidate.first; supportFace=candidate.second
+            }
+            support=supportPos!!; face=supportFace
+            if(block(support)?.boxes?.isNotEmpty()!=true) { fail("support disappeared"); return }
+            if(tower!=null && phase==Phase.POSITION) {
+                if(!p.onGround) return
+                if(hypot(pos.x+0.5-p.posX,pos.z+0.5-p.posZ)>0.07) {
+                    instance.keyboard.pressKey(Key.Type.KEY_LSHIFT); ownsSneak=true
+                    steerTo(pos.x+0.5,pos.z+0.5); return
+                }
+                if(ownsSneak) instance.keyboard.unpressKey(Key.Type.KEY_LSHIFT)
+                ownsSneak=false; move(emptySet()); phase(Phase.AIM)
+            } else if(tower==null) {
+                instance.keyboard.pressKey(Key.Type.KEY_LSHIFT); ownsSneak=true
+                if(phase==Phase.POSITION && pos.y+1<=p.boundingBox.minY+0.05 && support.y==pos.y) {
+                    val x=support.x+0.5+(pos.x-support.x)*0.65
+                    val z=support.z+0.5+(pos.z-support.z)*0.65
+                    if(hypot(x-p.posX,z-p.posZ)>0.09) { steerTo(x,z); return }
+                }
+                move(emptySet()); phase(Phase.AIM)
+            }
+        } else {
             val live=w.getBlock(pos.x,pos.y,pos.z)
-            if(Block.getIdFromBlock(live)!=a.blockId) return
+            if(Block.getIdFromBlock(live)!=a.blockId) {
+                if(ownsMouse) { instance.mouse.unpressButton(MouseButton.Type.LEFT_CLICK); instance.playerController?.resetBlockRemoving() }
+                phase(Phase.CONFIRM); return
+            }
+            if(phase==Phase.POSITION) phase(Phase.AIM)
+        }
+
+        val center=faceCenter(support,face)
+        // posY already includes the legacy client's eye offset.
+        val dx=center.xCoord-p.posX; val dy=center.yCoord-p.posY; val dz=center.zCoord-p.posZ
+        if(sqrt(dx*dx+dy*dy+dz*dz)>4.5) { fail("support outside reach"); return }
+        val yaw=Math.toDegrees(atan2(-dx,dz)).toFloat()
+        val pitch=-Math.toDegrees(atan2(dy,hypot(dx,dz))).toFloat()
+        instance.mouse.changeYaw(wrap(yaw-p.rotationYaw)); instance.mouse.changePitch(pitch-p.rotationPitch)
+        ownsAim=true
+        // Check the actual applied rotation, not a stale render hit or a queued mouse delta.
+        instance.entityRenderer.getMouseOver(1.0f)
+        val hit=instance.objectMouseOver
+        val aimed=abs(wrap(yaw-p.rotationYaw))<1.5 && abs(pitch-p.rotationPitch)<1.5 &&
+            hit?.typeOfHit==MovingObjectPosition.MovingObjectType.BLOCK &&
+            hit.blockX==support.x && hit.blockY==support.y && hit.blockZ==support.z &&
+            (face<0 || hit.sideHit==face)
+        if(!aimed) {
+            if(a.kind==BlockActionKind.BREAK && ownsMouse) instance.mouse.unpressButton(MouseButton.Type.LEFT_CLICK)
+            return
+        }
+        if(tower!=null) {
+            phase(Phase.EXECUTE)
+            when(towerMotion?:tower!!.update(state(),false,false)) {
+                TowerPlacement.Motion.TAKEOFF -> {
+                    instance.keyboard.pressKey(Key.Type.KEY_SPACE); ownsJump=true; return
+                }
+                TowerPlacement.Motion.FAILED -> { fail("missed tower placement window"); return }
+                TowerPlacement.Motion.RISING -> {
+                    if(ownsJump) instance.keyboard.unpressKey(Key.Type.KEY_SPACE)
+                    ownsJump=false; return
+                }
+                TowerPlacement.Motion.PLACE -> {
+                    if(ownsJump) instance.keyboard.unpressKey(Key.Type.KEY_SPACE)
+                    ownsJump=false
+                }
+                else -> return
+            }
+        }
+        phase(Phase.EXECUTE); status=ActionStatus.EXECUTING
+        if(a.kind==BlockActionKind.BREAK) {
             instance.mouse.pressButton(MouseButton.Type.LEFT_CLICK); ownsMouse=true
-        } else if(!clicked) {
-            instance.mouse.pressButton(25,MouseButton.Type.RIGHT_CLICK); ownsMouse=true; clicked=true
+        } else {
+            instance.mouse.pressButton(60,MouseButton.Type.RIGHT_CLICK); ownsMouse=true; clicked=true
+            phase(Phase.CONFIRM)
         }
     }
     private fun wrap(v: Float): Float { var x=v%360; if(x>=180)x-=360; if(x< -180)x+=360; return x }
     private fun release() {
-        if(ownsMouse) { instance.mouse.clearPendingClicks(); instance.mouse.unpressButton(MouseButton.Type.LEFT_CLICK,MouseButton.Type.RIGHT_CLICK); instance.playerController?.resetBlockRemoving() }
+        if(ownsMouse || ownsAim) instance.mouse.clearPendingClicks()
+        if(ownsMouse) { instance.mouse.unpressButton(MouseButton.Type.LEFT_CLICK,MouseButton.Type.RIGHT_CLICK); instance.playerController?.resetBlockRemoving() }
         if(ownsSneak) instance.keyboard.unpressKey(Key.Type.KEY_LSHIFT)
         if(ownsJump) instance.keyboard.unpressKey(Key.Type.KEY_SPACE)
-        ownsMouse=false; ownsSneak=false; ownsJump=false
+        ownsMouse=false; ownsAim=false; ownsSneak=false; ownsJump=false
     }
-    private fun fail() { release(); status=ActionStatus.FAILED }
+    private fun fail(reason: String="inventory preparation failed") { move(emptySet()); release(); failureReason=reason; status=ActionStatus.FAILED }
     override fun cancelAction() {
         val previous=action
         if(previous!=null && status !in setOf(ActionStatus.IDLE,ActionStatus.CONFIRMED)) {
@@ -260,6 +408,7 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         move(emptySet())
         release(); swapToken?.let { if(instance.inventoryTransactionStatus(it)!=InventoryTransactionStatus.PENDING) instance.forgetInventoryTransaction(it) else orphanedSwaps.add(it) }
         swapToken=null; selectedSlot=-1; clicked=false; action=null; status=ActionStatus.IDLE
+        tower=null; supportPos=null; supportFace=-1; buoyancyHeld=false
     }
     override fun reset() { cancelAction(); pendingBinding.set(null); permissions.bind(""); payloads.clear(); blocks.clear(); blockRevision++ }
 }

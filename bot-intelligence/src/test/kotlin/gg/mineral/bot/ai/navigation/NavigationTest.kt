@@ -132,9 +132,11 @@ class NavigationTest {
         var player=NavigationState(NavVec(0.5,1.0,0.5),0f,true,false,300)
         var keys=emptySet<Key.Type>()
         var status=ActionStatus.IDLE
+        var material: BuildingMaterial?=null
+        override var searchBudget=NavigationSearchBudget.UNLIMITED
         val requests=mutableListOf<BlockAction>()
         override fun state()=player
-        override fun material(): BuildingMaterial?=null
+        override fun material(): BuildingMaterial?=material
         override fun move(keys: Set<Key.Type>) { this.keys=keys }
         override fun requestAction(action: BlockAction): ActionStatus { requests.add(action); status=ActionStatus.WAITING; return status }
         override fun actionStatus()=status
@@ -206,7 +208,7 @@ class NavigationTest {
         for(x in -1..1)for(z in -1..1)if(x!=0 || z!=0)for(y in 1..3)ctx.fixture.solid(x,y,z)
         val navigator=CombatNavigator(ctx)
         for(tick in 1..50) navigator.update(tick,NavVec(7.5,1.0,0.5),0.3,false,true)
-        assertEquals("waiting for terrain",navigator.diagnostic)
+        assertTrue(navigator.searchesStarted>=3, "unreachable terrain should retry instead of sleeping indefinitely")
         ctx.player=ctx.player.copy(position=NavVec(2.5,1.0,0.5))
         navigator.update(51,NavVec(7.5,1.0,0.5),0.3,false,true)
         assertEquals("direct",navigator.diagnostic)

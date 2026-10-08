@@ -33,17 +33,39 @@ interface NavigationWorld {
 }
 
 enum class BlockActionKind { BREAK, PLACE }
+/** Execution hints are local only; the version 1 wire format is unchanged. */
+enum class PlacementStyle { AUTO, BRIDGE, STEP, TOWER }
 data class BlockAction(val kind: BlockActionKind, val pos: BlockPos,
-                       val blockId: Int, val metadata: Int = 0, val slot: Int = -1)
+                       val blockId: Int, val metadata: Int = 0, val slot: Int = -1,
+                       val placement: PlacementStyle = PlacementStyle.AUTO)
 enum class ActionStatus { IDLE, WAITING, EXECUTING, CONFIRMED, FAILED }
 data class NavigationState(val position: NavVec, val yaw: Float, val onGround: Boolean,
                            val inWater: Boolean, val air: Int, val width: Double = 0.6,
                            val height: Double = 1.8, val velocity: NavVec = NavVec(0.0, 0.0, 0.0))
 data class BuildingMaterial(val id: Int, val metadata: Int, val slot: Int, val count: Int)
 
+data class NavigationCombatState(val protected: Boolean = false,
+                                 val targetId: java.util.UUID? = null,
+                                 val preserveOpenMovement: Boolean = false)
+
+interface NavigationSearchBudget {
+    fun acquire(owner: Any): Long
+    fun finish(owner: Any, elapsedNanos: Long) {}
+    fun cancel(owner: Any) {}
+    companion object {
+        val UNLIMITED = object : NavigationSearchBudget {
+            override fun acquire(owner: Any) = 1_000_000L
+        }
+    }
+}
+
 /** Minecraft adapters own interaction/confirmation. Search never mutates the live world. */
 interface NavigationContext {
     val world: NavigationWorld
+    val searchBudget: NavigationSearchBudget get() = NavigationSearchBudget.UNLIMITED
+    val actionOverheadTicks: Double get() = 4.0
+    val actionDiagnostic: String get() = actionStatus().name
+    fun maintainBuoyancy(inWater: Boolean) {}
     fun state(): NavigationState
     fun material(): BuildingMaterial?
     fun move(keys: Set<gg.mineral.bot.api.controls.Key.Type>) {}

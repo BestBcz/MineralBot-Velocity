@@ -6,6 +6,46 @@ import org.junit.jupiter.api.Test
 
 /** Measures sliced search only, not live Minecraft/server throughput. */
 class NavigationLoadTest {
+    @Test fun `shared budget gives one ten and fifty bots prompt movement and a first safe route`() {
+        for(count in listOf(1,10,50)) {
+            var now=0L
+            val budget=SharedNavigationBudget({ now })
+            val navigators=List(count) {
+                val world=FixtureWorld()
+                for(z in -2..2)for(y in 1..3)world.solid(3,y,z)
+                val context=object : NavigationContext {
+                    override val world=world
+                    override val searchBudget=budget
+                    override fun state()=NavigationState(NavVec(0.5,1.0,0.5),-90f,true,false,300)
+                    override fun material(): BuildingMaterial?=null
+                    override fun requestAction(action: BlockAction)=ActionStatus.FAILED
+                    override fun actionStatus()=ActionStatus.IDLE
+                    override fun tickAction() {}
+                    override fun cancelAction() {}
+                    override fun reset() {}
+                }
+                CombatNavigator(context)
+            }
+            val routes=IntArray(count) { -1 }
+            val moves=IntArray(count) { -1 }
+            for(tick in 0..39) {
+                navigators.forEachIndexed { i,navigator -> if(routes[i]<0) {
+                    navigator.update(tick,NavVec(8.5,1.0,0.5),0.3,false,false)
+                    moves[i]=navigator.firstMovementDelayTicks
+                    if(navigator.firstRouteDelayTicks>=0) {
+                        routes[i]=navigator.firstRouteDelayTicks
+                        navigator.pause()
+                    }
+                } }
+                if(routes.all { it>=0 })break
+                now+=50_000_000
+            }
+            assertTrue(moves.all { it in 0..3 })
+            assertTrue(routes.all { it>=0 },"bots=$count routes="+routes.toList())
+            println("Navigation startup fixture: bots=$count first_move_max_ticks="+moves.max()+" first_route_max_ticks="+routes.max())
+        }
+    }
+
     @Test fun `one ten and fifty simultaneous searches remain bounded and finish`() {
         for(count in listOf(1,10,50)) {
             val searches=(1..count).map {
