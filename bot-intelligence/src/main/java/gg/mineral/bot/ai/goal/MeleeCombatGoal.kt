@@ -45,9 +45,9 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         if (clientInstance.currentTick - lastTargetSwitchTick < 20) {
             val currentTarget = target
             val currentTargetState = snapshot.stateFor(currentTarget)
-            val guidedTargetUuid = clientInstance.guidedTargetUuid
+            val matchTargetUuid = clientInstance.matchTargetUuid
             if (currentTargetState != null && currentTargetState.distance3D <= targetSearchRange &&
-                (guidedTargetUuid == null || currentTargetState.uuid == guidedTargetUuid)
+                (matchTargetUuid == null || currentTargetState.uuid == matchTargetUuid)
             ) {
                 noteTargetState(currentTargetState)
                 return

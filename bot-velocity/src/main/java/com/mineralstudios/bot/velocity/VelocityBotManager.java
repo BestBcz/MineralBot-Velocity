@@ -56,7 +56,6 @@ public class VelocityBotManager {
     private final Object plugin;
     private final ProxyServer server;
     private final Logger logger;
-    private final boolean guideEnabled;
     private final gg.mineral.bot.base.client.instance.BungeeGuardForwarding forwarding;
     private final boolean timingDiagnosticsEnabled;
     private final boolean velocityInputRecoveryEnabled;
@@ -66,7 +65,6 @@ public class VelocityBotManager {
     private static final String SUB_CHANNEL_BOT_DUEL = "BotDuel";
     private static final String SUB_CHANNEL_BOT_DUEL_STARTED = "BotDuelStarted";
     private static final String SUB_CHANNEL_BOT_DISCONNECT = "BotDisconnect";
-    private static final String SUB_CHANNEL_BOT_GUIDE = "BotGuide";
     private static final String SUB_CHANNEL_BOT_DUEL_FAILED = "BotDuelFailed";
     private static final String SUB_CHANNEL_BOT_REPAIR_MATCH_ENTITIES = "BotRepairMatchEntities";
     private static final String SUB_CHANNEL_BOT_REQUEST_ACCEPTED = "BotRequestAccepted";
@@ -76,59 +74,6 @@ public class VelocityBotManager {
 
     // Track active bots: Bot UUID -> ClientInstance
     private final Map<UUID, ClientInstance> activeBots = new ConcurrentHashMap<>();
-
-    private void handleBotGuide(ByteArrayDataInput in) {
-        try {
-            // Read UUIDs as longs (Most Significant Bits, Least Significant Bits)
-            long botUuidMost = in.readLong();
-            long botUuidLeast = in.readLong();
-            long targetUuidMost = in.readLong();
-            long targetUuidLeast = in.readLong();
-
-            UUID botUuid = new UUID(botUuidMost, botUuidLeast);
-            UUID targetUuid = new UUID(targetUuidMost, targetUuidLeast);
-
-            // Bot Data
-            double bX = in.readDouble();
-            double bY = in.readDouble();
-            double bZ = in.readDouble();
-            float bYaw = in.readFloat();
-            float bPitch = in.readFloat();
-
-            // Target Data
-            double tX = in.readDouble();
-            double tY = in.readDouble();
-            double tZ = in.readDouble();
-            float tYaw = in.readFloat();
-            float tPitch = in.readFloat();
-
-            double tVelX = in.readDouble();
-            double tVelY = in.readDouble();
-            double tVelZ = in.readDouble();
-
-            double botHealth = in.readDouble();
-            double targetHealth = in.readDouble();
-            int botFood = in.readInt();
-            float botSat = in.readFloat();
-            boolean targetBlocking = in.readBoolean();
-
-            // Update ClientInstance directly
-            UUID ourBotUuid = resolveToOurUuid(botUuid);
-            ClientInstance bot = getBot(ourBotUuid);
-            if (bot != null) {
-                botTargets.put(ourBotUuid, targetUuid);
-                bot.setGuidedTargetUuid(targetUuid);
-                bot.updateFromGuide(
-                        bX, bY, bZ, bYaw, bPitch, (float) botHealth, botFood, botSat,
-                        targetUuid, tX, tY, tZ, tYaw, tPitch,
-                        tVelX, tVelY, tVelZ, (float) targetHealth, targetBlocking);
-            }
-
-        } catch (Exception e) {
-            // Suppress error log frequency in production if needed, but for now keep it
-            logger.error("Failed to parse BotGuide message", e);
-        }
-    }
 
     // Track bot targets: Bot UUID -> Target Player UUID
     private final Map<UUID, UUID> botTargets = new ConcurrentHashMap<>();
@@ -166,7 +111,6 @@ public class VelocityBotManager {
             Object plugin,
             ProxyServer server,
             Logger logger,
-            boolean guideEnabled,
             gg.mineral.bot.base.client.instance.BungeeGuardForwarding forwarding,
             int gameLoopWorkers,
             boolean timingDiagnosticsEnabled,
@@ -175,7 +119,6 @@ public class VelocityBotManager {
         this.plugin = plugin;
         this.server = server;
         this.logger = logger;
-        this.guideEnabled = guideEnabled;
         this.forwarding = forwarding;
         this.timingDiagnosticsEnabled = timingDiagnosticsEnabled;
         this.velocityInputRecoveryEnabled = velocityInputRecoveryEnabled;
@@ -183,9 +126,8 @@ public class VelocityBotManager {
         this.loopScheduler = new BotLoopScheduler(gameLoopWorkers, startupWorkers);
 
         logger.info(
-                "VelocityBotManager initialized (guide-enabled={}, connection-mode=direct-backend-bungeeguard, game-loop-workers={}, "
+                "VelocityBotManager initialized (connection-mode=direct-backend-bungeeguard, game-loop-workers={}, "
                         + "startup-workers={}, timing-diagnostics={}, velocity-input-recovery-enabled={})",
-                guideEnabled,
                 gameLoopWorkers,
                 startupWorkers,
                 timingDiagnosticsEnabled,
@@ -770,11 +712,6 @@ public class VelocityBotManager {
             case SUB_CHANNEL_BOT_DISCONNECT:
                 handleBotDisconnect(in);
                 break;
-            case SUB_CHANNEL_BOT_GUIDE:
-                if (guideEnabled) {
-                    handleBotGuide(in);
-                }
-                break;
             default:
                 logger.debug("Ignored subchannel: {}", subChannel);
         }
@@ -959,7 +896,7 @@ public class VelocityBotManager {
             }
 
             botTargets.put(ourBotUUID, targetUUID);
-            bot.setGuidedTargetUuid(targetUUID);
+            bot.setMatchTargetUuid(targetUUID);
             kitTypes.put(ourBotUUID, kitType);
             botDifficulties.put(ourBotUUID, difficulty);
             botRequestTokens.put(ourBotUUID, requestToken);

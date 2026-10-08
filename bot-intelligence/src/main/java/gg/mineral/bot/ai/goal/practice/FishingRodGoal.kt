@@ -44,9 +44,7 @@ class FishingRodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     }
 
     private fun sampleMotion(enemy: CombatPerception.PlayerState): RodTargetMotion.Velocity =
-        targetMotion.sample(enemy.entity.entityId, clientInstance.currentTick, enemy.x, enemy.y, enemy.z,
-            if (enemy.uuid == clientInstance.guidedTargetUuid) RodTargetMotion.Velocity(
-                enemy.entity.motionX, enemy.entity.motionY, enemy.entity.motionZ) else null)
+        targetMotion.sample(enemy.entity.entityId, clientInstance.currentTick, enemy.x, enemy.y, enemy.z)
 
     override fun onStart() {
         clientInstance.mouse.clearPendingClicks()

@@ -11,13 +11,12 @@ Bot 的游戏连接现在直接使用 BotDuel `serverName` 对应的 Velocity Re
 ```properties
 bungeeguard-secret-file=../../forwarding.secret
 bot-forwarded-ip=127.0.0.1
-guide-enabled=false
 ```
 
 secret 文件路径相对于 **MineralBot 插件数据目录**；默认路径指向 Velocity 工作目录的
 `forwarding.secret`。如主代理使用其他 secret 文件，请引用同一个文件，Windows 路径使用 `/`。
 不需要复制 token 到插件配置。文件不可读、为空或格式错误时，创建请求失败，不回退到普通握手。
-secret 仅启动时读取，轮换后重启主 Velocity。已有 `guide-enabled=false` 配置会保留。
+secret 仅启动时读取，轮换后重启主 Velocity。旧配置中的 `guide-enabled` 已不再读取，可以删除；保留也不影响启动。
 
 跨机器时可将 `bot-forwarded-ip` 改为 Bot 宿主机的内网 IP；它是转发给插件看的身份地址，
 不是 socket 绑定地址，也不会自动改变防火墙规则。
@@ -31,11 +30,12 @@ Practice 配置必须满足：
 
 ## 生命周期兼容
 
-已核对 Micet-PotPvP 的 BotDuelHandler、BotDuelListener 和 BotGuideTask。
+已核对 Micet-PotPvP 的 BotDuelHandler、BotDuelListener 和 BotNavigationTask。
 Practice 按现有请求 token 对应的 Bot 名称匹配入服者，实际 UUID 来自转发握手。
 BotRequestAccepted / BotRequestCancelled / BotDisconnect 可能通过任意在线玩家发送。
 因此客户端接收到 MineralBot 控制消息时，会调用同一个内部管理器；通过真人玩家连接到达的
-消息仍由 Velocity 处理。`guide-enabled=false` 会继续忽略 BotGuide。BotKnockback 保持客户端原有处理。
+消息仍由 Velocity 处理。BotDuelStarted 继续分配对局目标和友方 UUID；实体状态来自原版游戏数据包。
+导航权限与操作确认由独立消息同步。BotKnockback 保持客户端原有处理。
 没有修改 Practice、VeloAuth 或 BungeeGuard 的认证逻辑。
 
 ## 验证与上线
