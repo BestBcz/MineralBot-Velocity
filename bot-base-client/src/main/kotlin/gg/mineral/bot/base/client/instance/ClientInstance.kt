@@ -75,6 +75,7 @@ open class ClientInstance(
         ClientInstance {
 
     @Volatile var backendControlListener: java.util.function.Consumer<ByteArray>? = null
+    override val navigationContext = gg.mineral.bot.base.client.navigation.MinecraftNavigationContext(this)
     var bungeeGuardForwarding: BungeeGuardForwarding? = null
     @Volatile var directConnectionStage: String = "DIRECT_RESOLVE_TARGET"
 
@@ -495,6 +496,7 @@ open class ClientInstance(
     }
 
     override fun runTick() {
+        navigationContext.pump()
         applyPendingGuideUpdate()
         super.runTick()
         currentTick++
@@ -533,6 +535,7 @@ open class ClientInstance(
     }
 
     override fun shutdownMinecraftApplet() {
+        navigationContext.reset()
         if (InstanceManager.instances.remove(configuration.uuid) != null)
                 logger.debug("Removed instance: {}", configuration.uuid)
         if (InstanceManager.pendingInstances.remove(configuration.uuid) != null)

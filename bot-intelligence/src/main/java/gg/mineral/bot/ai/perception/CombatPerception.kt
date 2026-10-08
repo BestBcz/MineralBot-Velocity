@@ -272,7 +272,7 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         val boxes = mutableListOf<BoundingBox>()
         val minX = floor(box.minX)
         val maxX = floor(box.maxX + 1.0)
-        val minY = floor(box.minY)
+        val minY = floor(box.minY) - 1
         val maxY = floor(box.maxY + 1.0)
         val minZ = floor(box.minZ)
         val maxZ = floor(box.maxZ + 1.0)
@@ -281,8 +281,17 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
             for (blockY in minY until maxY) {
                 for (blockZ in minZ until maxZ) {
                     val block = world.getBlockAt(blockX, blockY, blockZ)
+                    val navigationWorld = clientInstance.navigationContext?.world
+                    if (navigationWorld != null) {
+                        val shapes = navigationWorld.block(gg.mineral.bot.api.navigation.BlockPos(blockX, blockY, blockZ))?.boxes ?: continue
+                        for (shape in shapes) {
+                            val exact = SimpleBoundingBox(shape.minX, shape.minY, shape.minZ, shape.maxX, shape.maxY, shape.maxZ)
+                            if (intersects(box, exact)) boxes.add(exact)
+                        }
+                        continue
+                    }
                     val rawCollisionBox = block.getCollisionBoundingBox(world, blockX, blockY, blockZ) ?: continue
-                    val collisionBox = normalizedCollisionBox(block, rawCollisionBox)
+                    val collisionBox = rawCollisionBox
                     if (intersects(box, collisionBox)) {
                         boxes.add(collisionBox)
                     }
@@ -291,26 +300,6 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         }
 
         return boxes
-    }
-
-    private fun normalizedCollisionBox(block: Block, collisionBox: BoundingBox): BoundingBox {
-        if (!block.javaClass.simpleName.contains("Stairs", ignoreCase = true)) {
-            return collisionBox
-        }
-
-        val maxStepY = collisionBox.minY + MAX_STEP_HEIGHT
-        if (collisionBox.maxY <= maxStepY) {
-            return collisionBox
-        }
-
-        return SimpleBoundingBox(
-            minX = collisionBox.minX,
-            minY = collisionBox.minY,
-            minZ = collisionBox.minZ,
-            maxX = collisionBox.maxX,
-            maxY = maxStepY,
-            maxZ = collisionBox.maxZ
-        )
     }
 
     private fun intersects(box: ProbeBox, collisionBox: BoundingBox): Boolean {
@@ -503,22 +492,27 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
     private fun hasLikelyLineOfSight(self: FakePlayer, target: ClientPlayer): Boolean {
         val world = self.world
         val startX = self.x
-        val startY = self.y + self.eyeHeight
+        val startY = self.boundingBox.minY + 1.62
         val startZ = self.z
         val endX = target.x
-        val endY = target.y + target.eyeHeight * 0.75
+        val endY = target.boundingBox.minY + 1.4
         val endZ = target.z
 
         val distance = self.distance3DTo(target).coerceAtLeast(0.001)
-        val steps = (distance * 2.0).toInt().coerceIn(2, 18)
+        val steps = (distance * 8.0).toInt().coerceIn(2, 256)
 
         for (step in 1 until steps) {
             val t = step.toDouble() / steps.toDouble()
-            val blockId = world.getBlockAt(
-                startX + (endX - startX) * t,
-                startY + (endY - startY) * t,
-                startZ + (endZ - startZ) * t
-            ).id
+            val x = startX + (endX - startX) * t
+            val y = startY + (endY - startY) * t
+            val z = startZ + (endZ - startZ) * t
+            val navigationWorld = clientInstance.navigationContext?.world
+            if (navigationWorld != null) {
+                val block = navigationWorld.block(gg.mineral.bot.api.navigation.BlockPos.at(x, y, z)) ?: return false
+                if (block.boxes.any { x > it.minX && x < it.maxX && y > it.minY && y < it.maxY && z > it.minZ && z < it.maxZ }) return false
+                continue
+            }
+            val blockId = world.getBlockAt(x, y, z).id
             if (isOccludingVision(blockId)) {
                 return false
             }

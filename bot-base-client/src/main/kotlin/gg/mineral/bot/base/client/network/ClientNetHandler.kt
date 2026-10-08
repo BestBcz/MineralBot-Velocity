@@ -48,6 +48,9 @@ class ClientNetHandler(mc: Minecraft, guiScreen: GuiScreen?, netManager: Network
         gameController.gameSettings.sendSettingsToServer()
         val netManager = this.networkManager
         netManager.scheduleOutboundPacket(
+                C17PacketCustomPayload("REGISTER", "MineralBot".toByteArray(StandardCharsets.UTF_8))
+        )
+        netManager.scheduleOutboundPacket(
                 C17PacketCustomPayload(
                         "MC|Brand",
                         ClientBrandRetriever.getClientModName().toByteArray(StandardCharsets.UTF_8)

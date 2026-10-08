@@ -963,6 +963,7 @@ public class VelocityBotManager {
             kitTypes.put(ourBotUUID, kitType);
             botDifficulties.put(ourBotUUID, difficulty);
             botRequestTokens.put(ourBotUUID, requestToken);
+            bot.getNavigationContext().bind(requestToken);
             botDeclaredFriendlyUuids.put(ourBotUUID, new HashSet<>(friendlyUUIDs));
             refreshAllFriendlyUuidMappings();
 

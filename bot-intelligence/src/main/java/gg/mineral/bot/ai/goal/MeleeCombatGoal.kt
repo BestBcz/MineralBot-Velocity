@@ -16,6 +16,7 @@ import gg.mineral.bot.api.world.block.Block
 
 class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance) {
     private val perception = CombatPerception(clientInstance)
+    private val navigator = clientInstance.navigationContext?.let { gg.mineral.bot.ai.navigation.CombatNavigator(it) }
     private var target: ClientPlayer? = null
 
     private val meanDelay = (1000 / clientInstance.configuration.averageCps).toLong()
@@ -170,6 +171,13 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val predictedTarget = buildPredictedTarget(target)
         val optimalAngles = computeOptimalYawAndPitch(fakePlayer, predictedTarget)
         val distance = fakePlayer.distance3DTo(target)
+
+        val routeYaw = navigator?.steeringYaw
+        if (navigator?.ownsMovement == true && routeYaw != null && (distance > 6.0 || navigator.preparingJump)) {
+            setMouseYaw(routeYaw)
+            setMousePitch(optimalAngles[0])
+            return
+        }
 
         if (distance > 6.0f) {
             setMouseYaw(optimalAngles[1])
@@ -433,6 +441,13 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         }
 
         strafeDirection = lockedStrafeDirection(target)
+        if (navigator != null) {
+            val sideYaw = fakePlayer.yaw + if (strafeDirection == 1.toByte()) -90f else 90f
+            if (!perception.terrainAhead(sideYaw, 0.65).passable) {
+                releaseStrafe()
+                return
+            }
+        }
 
         when (strafeDirection.toInt()) {
             1 -> {
@@ -554,11 +569,18 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         }
     }
 
-    private fun shouldYieldInventoryControl(): Boolean = clientInstance.blocksContinuousInventory
+    private fun shouldYieldInventoryControl(): Boolean = clientInstance.blocksContinuousInventory || navigator?.ownsInteraction == true
 
-    private fun shouldYieldAimControl(): Boolean = clientInstance.blocksContinuousAim
+    private fun shouldYieldAimControl(): Boolean = clientInstance.blocksContinuousAim || navigator?.ownsInteraction == true
 
-    private fun shouldYieldAttackControl(): Boolean = clientInstance.blocksContinuousAttack
+    private fun shouldYieldAttackControl(): Boolean {
+        if (clientInstance.blocksContinuousAttack || navigator?.ownsInteraction == true) return true
+        if (navigator?.ownsMovement == true) {
+            val state = perception.snapshot().stateFor(target) ?: return true
+            return !state.lineOfSightLikelyClear || state.distance3D > clientInstance.configuration.reach + 0.35
+        }
+        return false
+    }
 
     private fun shouldYieldMovementToUtility(): Boolean = clientInstance.blocksContinuousMovement
 
@@ -567,7 +589,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val yieldingAimControl = shouldYieldAimControl()
         val yieldingMovement = shouldYieldMovementToUtility()
 
-        if (!yieldingMovement) {
+        if (!yieldingMovement && navigator == null) {
             maintainForwardMovement()
         }
 
@@ -583,7 +605,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             }
         }
 
-        if (!(clientInstance.hasActiveSporadicGoal && clientInstance.currentScreen is ContainerScreen)) {
+        if (navigator?.ownsInteraction != true && !(clientInstance.hasActiveSporadicGoal && clientInstance.currentScreen is ContainerScreen)) {
             tick.prerequisite("Inventory Closed", clientInstance.currentScreen == null) {
                 pressKey(
                     10,
@@ -605,7 +627,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             }
         }
 
-        if (this.target == null && timeMillis() - lastBounceTime > 1000) if (isCollidingWithWall) reflectOffWall()
+        if (navigator == null && this.target == null && timeMillis() - lastBounceTime > 1000) if (isCollidingWithWall) reflectOffWall()
     }
 
     override fun onEvent(event: Event): Boolean {
@@ -626,8 +648,10 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         if (target != null && entity.uuid == target.uuid) {
             refreshHitWindow()
             recentHitsOnTarget++
-            sprintReset()
-            lastSprintResetTick = clientInstance.currentTick
+            if (navigator?.ownsMovement != true) {
+                sprintReset()
+                lastSprintResetTick = clientInstance.currentTick
+            }
         } else if (entity.uuid == fakePlayer.uuid) {
             refreshHitWindow()
             recentHitsTaken++
@@ -639,6 +663,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     public override fun onGameLoop() {
         if (!shouldYieldMovementToUtility()) {
             applyHumanizedMovement()
+        } else {
+            navigator?.pause()
         }
         if (!shouldYieldAttackControl() && timeMillis() >= nextClick) {
             attackTarget()
@@ -651,6 +677,21 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
         val fakePlayer = clientInstance.fakePlayer
         val snapshot = perception.snapshot()
         expireHitWindow()
+        if (navigator != null) {
+            val remembered = target == null && clientInstance.currentTick - lastSeenTargetTick <= 16
+            val navigationTarget = target?.let { gg.mineral.bot.api.navigation.NavVec(it.x, it.y, it.z) }
+                ?: if (remembered) gg.mineral.bot.api.navigation.NavVec(lastKnownTargetX, lastKnownTargetY, lastKnownTargetZ) else null
+            val clearSight = snapshot.stateFor(target)?.lineOfSightLikelyClear == true
+            val navigating = navigator.update(clientInstance.currentTick, navigationTarget,
+                if (remembered) 0.5 else clientInstance.configuration.reach + 0.35, clearSight,
+                !clientInstance.hasActiveSporadicGoal &&
+                    (!clientInstance.blocksContinuousInventory || navigator.ownsInteraction) && !clientInstance.blocksContinuousAim)
+            if (navigating) {
+                strafeDirection = 0
+                strafeLockedUntilTick = -1
+                return
+            }
+        }
 
         if (target == null) {
             releaseStrafe()
@@ -688,7 +729,17 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             return
         }
 
-        applyTerrainAwareMovement()
+        maintainForwardMovement()
+        if (navigator == null) {
+            applyTerrainAwareMovement()
+        } else {
+            val terrain = perception.terrainAhead(fakePlayer.yaw)
+            if (terrain.dangerousDrop || terrain.frontBlocked || terrain.lavaAhead) {
+                unpressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
+            } else if (terrain.requiresJump && fakePlayer.isOnGround) {
+                pressKey(100, Key.Type.KEY_SPACE)
+            }
+        }
         strafe()
     }
 

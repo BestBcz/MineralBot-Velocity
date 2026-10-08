@@ -13,6 +13,9 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.UUID
 
 interface ClientInstance : EventHandler {
+    val navigationContext: gg.mineral.bot.api.navigation.NavigationContext?
+        get() = null
+
     /**
      * Sets the player's goals.
      *

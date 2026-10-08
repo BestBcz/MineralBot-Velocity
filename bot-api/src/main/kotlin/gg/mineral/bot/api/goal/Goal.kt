@@ -37,7 +37,10 @@ abstract class Goal(protected val clientInstance: ClientInstance) : MathUtil {
 
     fun checkExecute(): Boolean {
         if (shouldExecute()) {
-            if (this is Sporadic) callStart()
+            if (this is Sporadic) {
+                if (!executing) clientInstance.navigationContext?.cancelAction()
+                callStart()
+            }
             return true
         }
         return false

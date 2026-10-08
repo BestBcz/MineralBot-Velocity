@@ -206,6 +206,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
         this.currentServerMaxPlayers = p_147282_1_.func_149193_h();
         this.gameController.playerController.setGameType(p_147282_1_.func_149198_e());
         this.gameController.gameSettings.sendSettingsToServer();
+        this.netManager.scheduleOutboundPacket(new C17PacketCustomPayload("REGISTER", "MineralBot".getBytes(Charsets.UTF_8)));
         this.netManager.scheduleOutboundPacket(
                 new C17PacketCustomPayload("MC|Brand",
                         ClientBrandRetriever.getClientModName().getBytes(Charsets.UTF_8))
@@ -593,6 +594,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
      * S21PacketChunkData
      */
     public void handleMultiBlockChange(S22PacketMultiBlockChange p_147287_1_) {
+        if (gameController instanceof ClientInstance instance) instance.getNavigationContext().changed();
         int var2 = p_147287_1_.func_148920_c().chunkXPos * 16;
         int var3 = p_147287_1_.func_148920_c().chunkZPos * 16;
 
@@ -621,6 +623,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
      * and lighting recalculation
      */
     public void handleChunkData(S21PacketChunkData chunkDataPacket) {
+        if (gameController instanceof ClientInstance instance) instance.getNavigationContext().changed();
         if (chunkDataPacket.isGroundUpContinuous()) {
             if (chunkDataPacket.getPrimaryBitMap() == 0) {
                 this.clientWorldController.doPreChunk(chunkDataPacket.getChunkX(), chunkDataPacket.getChunkZ(),
@@ -656,6 +659,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
      * clients)
      */
     public void handleBlockChange(S23PacketBlockChange p_147234_1_) {
+        if (gameController instanceof ClientInstance instance) instance.getNavigationContext().changed();
         this.clientWorldController.func_147492_c(p_147234_1_.func_148879_d(), p_147234_1_.func_148878_e(),
                 p_147234_1_.func_148877_f(), p_147234_1_.func_148880_c(), p_147234_1_.func_148881_g());
     }
@@ -1303,6 +1307,7 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
     }
 
     public void handleMapChunkBulk(S26PacketMapChunkBulk p_147269_1_) {
+        if (gameController instanceof ClientInstance instance) instance.getNavigationContext().changed();
         for (int var2 = 0; var2 < p_147269_1_.func_149254_d(); ++var2) {
             int var3 = p_147269_1_.func_149255_a(var2);
             int var4 = p_147269_1_.func_149253_b(var2);
@@ -1610,6 +1615,10 @@ public class NetHandlerPlayClient implements INetHandlerPlayClient {
 
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
             String subChannel = in.readUTF();
+            if (subChannel.startsWith("BotNavigation") && gameController instanceof ClientInstance instance) {
+                instance.getNavigationContext().receive(data);
+                return true;
+            }
             if (!"BotKnockback".equals(subChannel)) {
                 if (gameController instanceof ClientInstance instance) {
                     var listener = instance.getBackendControlListener();
