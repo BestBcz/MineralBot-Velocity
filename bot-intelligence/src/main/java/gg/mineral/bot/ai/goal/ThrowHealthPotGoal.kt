@@ -80,7 +80,7 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             urgent = true
             burst.requireTwo()
         }
-        // Re-evaluate the current target's packet/guide-synchronized health every tick. Once a
+        // Re-evaluate the current target's packet-synchronized health every tick. Once a
         // bottle has been thrown, finish splash recovery and any required burst before attacking.
         if (!urgent && throwTick < 0 && shouldPressure(player.health)) {
             if (currentState != PotState.PRESSURING) {

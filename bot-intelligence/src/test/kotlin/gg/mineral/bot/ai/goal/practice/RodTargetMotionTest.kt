@@ -4,16 +4,11 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 class RodTargetMotionTest {
-    @Test fun `guide velocity stays consistent through uneven position updates and strafe reversal`() {
+    @Test fun `position samples across multiple ticks estimate per tick movement`() {
         val motion = RodTargetMotion()
-        val right = RodTargetMotion.Velocity(0.28, 0.0, 0.0)
-        val left = RodTargetMotion.Velocity(-0.28, 0.0, 0.0)
-        assertEquals(right, motion.sample(1, 0, 0.0, 0.0, 6.0, right))
-        assertEquals(right, motion.sample(1, 1, 0.0, 0.0, 6.0, right))
-        assertEquals(right, motion.sample(1, 2, 0.84, 0.0, 6.0, right))
-        assertEquals(left, motion.sample(1, 3, 0.56, 0.0, 6.0, left))
-        assertEquals(RodTargetMotion.Velocity(), motion.sample(1, 4, 0.56, 0.0, 6.0,
-            RodTargetMotion.Velocity()))
+        motion.sample(1, 0, 0.0, 0.0, 6.0)
+        assertEquals(0.21, motion.sample(1, 3, 0.84, 0.0, 6.0).x, 0.001)
+        assertTrue(motion.sample(1, 4, 0.56, 0.0, 6.0).x < 0)
     }
 
     @Test fun `strafe reversal immediately reverses lead and stopping clears it`() {

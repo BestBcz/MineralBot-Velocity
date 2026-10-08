@@ -51,8 +51,8 @@ interface ClientInstance : EventHandler {
      */
     val configuration: BotConfiguration
 
-    /** Target currently recommended by an authoritative external combat guide. */
-    val guidedTargetUuid: UUID?
+    /** Preferred opponent assigned by the match-start message; entity state comes from game packets. */
+    val matchTargetUuid: UUID?
         get() = null
 
     /**

@@ -35,7 +35,6 @@ import java.util.*
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.atomic.AtomicReference
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiScreen
 import net.minecraft.client.multiplayer.WorldClient
@@ -85,16 +84,13 @@ open class ClientInstance(
     // Delayed tasks queue.
     private val delayedTasks = ConcurrentLinkedQueue<DelayedTask>()
 
-    // Guide-created ghost targets so we can clean them up when real server entities exist.
-    private val guideTargetEntityIds = mutableMapOf<UUID, Int>()
-    private val pendingGuideUpdate = AtomicReference<GuideUpdate?>()
     var packetDiagnosticsListener: PacketDiagnosticsListener? = null
     var timingDiagnosticsListener: TimingDiagnosticsListener? = null
 
     override var latency: Int = 0
 
     @Volatile
-    override var guidedTargetUuid: UUID? = null
+    override var matchTargetUuid: UUID? = null
 
     override var currentTick: Int = 0
     private var foregroundGoalName: String? = null
@@ -219,28 +215,6 @@ open class ClientInstance(
     internal data class DelayedTask(val runnable: Runnable, val sendTime: Long) {
         fun canSend(currentTime: Long): Boolean = currentTime >= sendTime
     }
-
-    private data class GuideUpdate(
-            val bX: Double,
-            val bY: Double,
-            val bZ: Double,
-            val bYaw: Float,
-            val bPitch: Float,
-            val bHealth: Float,
-            val bFood: Int,
-            val bSat: Float,
-            val targetUuid: UUID,
-            val tX: Double,
-            val tY: Double,
-            val tZ: Double,
-            val tYaw: Float,
-            val tPitch: Float,
-            val tVelX: Double,
-            val tVelY: Double,
-            val tVelZ: Double,
-            val tHealth: Float,
-            val tBlocking: Boolean
-    )
 
     @JvmOverloads
     fun recordClientboundPacket(packetKey: String, entityId: Int = Int.MIN_VALUE, entityUuid: UUID? = null) {
@@ -497,7 +471,6 @@ open class ClientInstance(
 
     override fun runTick() {
         navigationContext.pump()
-        applyPendingGuideUpdate()
         super.runTick()
         currentTick++
         recoverFromUnexpectedForegroundScreen()
@@ -711,111 +684,10 @@ open class ClientInstance(
             super.displayWidth = value
         }
 
-    private fun applyPendingGuideUpdate() {
-        val update = pendingGuideUpdate.getAndSet(null) ?: return
-        applyGuideUpdate(update)
-    }
-
     companion object {
         private const val FOREGROUND_GOAL_WARN_TICKS = 20
         private const val FOREGROUND_GOAL_WARN_INTERVAL_TICKS = 20
         private val logger = LogManager.getLogger(ClientInstance::class.java)
-    }
-
-    /** Updates the bot's state and target entity from external guide data. */
-    fun updateFromGuide(
-            bX: Double,
-            bY: Double,
-            bZ: Double,
-            bYaw: Float,
-            bPitch: Float,
-            bHealth: Float,
-            bFood: Int,
-            bSat: Float,
-            targetUuid: UUID,
-            tX: Double,
-            tY: Double,
-            tZ: Double,
-            tYaw: Float,
-            tPitch: Float,
-            tVelX: Double,
-            tVelY: Double,
-            tVelZ: Double,
-            tHealth: Float,
-            tBlocking: Boolean
-    ) {
-        val update =
-                GuideUpdate(
-                        bX,
-                        bY,
-                        bZ,
-                        bYaw,
-                        bPitch,
-                        bHealth,
-                        bFood,
-                        bSat,
-                        targetUuid,
-                        tX,
-                        tY,
-                        tZ,
-                        tYaw,
-                        tPitch,
-                        tVelX,
-                        tVelY,
-                        tVelZ,
-                        tHealth,
-                        tBlocking
-                )
-
-        if (!isMainThread()) {
-            pendingGuideUpdate.set(update)
-            return
-        }
-
-        applyGuideUpdate(update)
-    }
-
-    private fun applyGuideUpdate(update: GuideUpdate) {
-        guidedTargetUuid = update.targetUuid
-
-        val player = this.thePlayer
-        if (player != null) {
-            player.setHealth(update.bHealth)
-            // player.foodStats.foodLevel = bFood // Accessor might vary
-            // player.foodStats.saturationLevel = bSat
-        }
-
-        val world = this.theWorld
-        if (world != null) {
-            var targetEntity = world.playerEntities.firstOrNull { it.gameProfile.id == update.targetUuid }
-            val guideEid = update.targetUuid.hashCode() or Int.MIN_VALUE
-
-            if (targetEntity != null) {
-                guideTargetEntityIds.remove(update.targetUuid)?.let { world.removeEntityFromWorld(it) }
-            } else {
-                val existing = world.getEntityByID(guideEid)
-                targetEntity = if (existing is net.minecraft.client.entity.EntityOtherPlayerMP) {
-                    existing
-                } else {
-                    val profile = com.mojang.authlib.GameProfile(update.targetUuid, "Target")
-                    net.minecraft.client.entity.EntityOtherPlayerMP(this, world, profile).also {
-                        // This guide-only entity is for aim info and must not affect collisions/knockback.
-                        it.noClip = true
-                        world.addEntityToWorld(guideEid, it)
-                        guideTargetEntityIds[update.targetUuid] = guideEid
-                    }
-                }
-            }
-
-            // Update target state - Target MUST be exact as we don't simulate it
-            targetEntity.setPositionAndRotation(update.tX, update.tY, update.tZ, update.tYaw, update.tPitch)
-            if (targetEntity is net.minecraft.entity.EntityLivingBase) {
-                targetEntity.setHealth(update.tHealth)
-            }
-            targetEntity.motionX = update.tVelX
-            targetEntity.motionY = update.tVelY
-            targetEntity.motionZ = update.tVelZ
-        }
     }
 
     fun updateKnockbackProfile(profile: gg.mineral.bot.base.client.profile.KnockbackProfile) {
