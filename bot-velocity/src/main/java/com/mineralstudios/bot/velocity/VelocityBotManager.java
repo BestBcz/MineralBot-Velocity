@@ -41,6 +41,9 @@ import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.IChatComponent;
 
 public class VelocityBotManager {
+    private final BotRegistrationGate identityGate;
+    private final com.velocitypowered.api.scheduler.ScheduledTask identityTimer;
+    private final Set<String> creatingTokens = ConcurrentHashMap.newKeySet();
     private record DirectTarget(String name, java.net.InetSocketAddress address, com.velocitypowered.api.proxy.server.RegisteredServer server) { }
 
     static boolean isPermanentLoginFailure(String reason) {
@@ -120,6 +123,11 @@ public class VelocityBotManager {
         this.server = server;
         this.logger = logger;
         this.forwarding = forwarding;
+        this.identityGate = new BotRegistrationGate(bytes -> {
+            if (this.forwarding == null) throw new IllegalStateException("Forwarding secret unavailable");
+            return this.forwarding.signIdentityMessage(bytes);
+        }, System::currentTimeMillis);
+        this.identityTimer = server.getScheduler().buildTask(plugin, identityGate::tick).repeat(1L, TimeUnit.SECONDS).schedule();
         this.timingDiagnosticsEnabled = timingDiagnosticsEnabled;
         this.velocityInputRecoveryEnabled = velocityInputRecoveryEnabled;
         int startupWorkers = Math.max(2, Math.min(4, gameLoopWorkers));
@@ -697,6 +705,12 @@ public class VelocityBotManager {
         }
 
         switch (subChannel) {
+            case gg.mineral.bot.identity.BotIdentityProtocol.READY:
+            case gg.mineral.bot.identity.BotIdentityProtocol.REJECTED:
+                if (!allowCreate) return; // Identity responses must originate from a backend connection, never a bot client.
+                try { identityGate.accept(payload, source.getServerInfo().getName()); }
+                catch (java.io.IOException e) { logger.warn("Rejected bot identity reply: {}", e.getMessage()); }
+                break;
             case SUB_CHANNEL_BOT_DUEL:
                 if (allowCreate) handleBotDuelRequest(in, source);
                 break;
@@ -733,6 +747,8 @@ public class VelocityBotManager {
                 latencyMillis = 0;
             }
 
+            int identityVersion;
+            try { identityVersion = in.readInt(); } catch (IllegalStateException e) { identityVersion = 0; }
             UUID playerUUID = UUID.fromString(playerUUIDStr);
             var registered = server.getServer(serverName).orElse(null);
             BotSessionDiagnostics rejected = new BotSessionDiagnostics(
@@ -742,6 +758,10 @@ public class VelocityBotManager {
                 return;
             }
             rejected.setControlSender(payload -> source.sendPluginMessage(MineralBotVelocity.MINERAL_BOT_CHANNEL, payload));
+            if (identityVersion != gg.mineral.bot.identity.BotIdentityProtocol.VERSION) {
+                notifyBotDuelFailed(rejected, "IDENTITY_PROTOCOL_REQUIRED", "Upgrade MicetPvP and AquaCore before creating bots.");
+                return;
+            }
             var address = registered.getServerInfo().getAddress();
             if (address.getPort() < 1 || address.getHostString().isBlank()
                     || address.getHostString().indexOf('\0') >= 0) {
@@ -800,6 +820,8 @@ public class VelocityBotManager {
     private void handleBotRequestCancelled(ByteArrayDataInput in) {
         try {
             String requestToken = in.readUTF();
+            identityGate.cancelToken(requestToken);
+            creatingTokens.remove(requestToken);
             purgeExpiredCancelledTokens();
             cancelledRequestTokens.put(requestToken,
                     System.currentTimeMillis() + CANCELLED_TOKEN_RETENTION_MILLIS);
@@ -839,6 +861,8 @@ public class VelocityBotManager {
             BotDifficulty difficulty = BotDifficulty.fromId(in.readUTF());
             String requestToken = in.readUTF();
 
+            int identityVersion;
+            try { identityVersion = in.readInt(); } catch (IllegalStateException e) { identityVersion = 0; }
             UUID playerUUID = UUID.fromString(playerUUIDStr);
             UUID serverBotUUID = UUID.fromString(botUUIDStr);
             UUID targetUUID = playerUUID;
@@ -940,12 +964,37 @@ public class VelocityBotManager {
             return;
         }
 
+        if (botRequestTokens.containsValue(requestToken) || !creatingTokens.add(requestToken)) return;
         UUID botUUID = UUID.randomUUID();
         String botUsername = generateUniqueBotUsername(requestToken);
         BotSessionDiagnostics diagnostics =
                 new BotSessionDiagnostics(playerUUID, botUUID, botUsername, requestToken, retryCount);
         diagnostics.setControlSender(payload -> target.server().sendPluginMessage(
                 MineralBotVelocity.MINERAL_BOT_CHANNEL, payload));
+        var registration = new gg.mineral.bot.identity.BotIdentityProtocol.Registration(
+                UUID.randomUUID(), requestToken, playerUUID, target.name(), botUUID, botUsername, System.currentTimeMillis());
+        identityGate.register(registration, bytes -> target.server().sendPluginMessage(
+                MineralBotVelocity.MINERAL_BOT_CHANNEL, bytes)).thenAccept(accepted -> {
+            if (shuttingDown.get() || isRequestCancelled(requestToken)) { creatingTokens.remove(requestToken); return; }
+            if (!accepted) {
+                creatingTokens.remove(requestToken);
+                notifyBotDuelFailed(diagnostics, "IDENTITY_REGISTRATION_FAILED", "No durable identity acknowledgement; bot was not connected.");
+                return;
+            }
+            logger.info("Bot identity acknowledged uuid={}, server={}, registration={}", botUUID, target.name(), registration.id);
+            try {
+                startRegisteredBot(botUUID, botUsername, playerUUID, target, kitType, difficulty, requestToken, latencyMillis, retryCount, diagnostics);
+            } catch (RuntimeException e) {
+                creatingTokens.remove(requestToken);
+                cleanupBot(botUUID, null, true);
+                notifyBotDuelFailed(diagnostics, "STARTUP_SCHEDULING_FAILED", e.getClass().getSimpleName());
+            }
+        });
+    }
+
+    private void startRegisteredBot(UUID botUUID, String botUsername, UUID playerUUID, DirectTarget target,
+            String kitType, BotDifficulty difficulty, String requestToken, int latencyMillis, int retryCount,
+            BotSessionDiagnostics diagnostics) {
         BotLoopScheduler.LoopHandle loopHandle;
         try {
             loopHandle = loopScheduler.createHandle(
@@ -958,6 +1007,7 @@ public class VelocityBotManager {
                             requestToken, latencyMillis, retryCount, botUsername, diagnostics, false));
             botLoopHandles.put(botUUID, loopHandle);
         } catch (RejectedExecutionException rejected) {
+            creatingTokens.remove(requestToken);
             if (!shuttingDown.get() && !isRequestCancelled(requestToken)) {
                 notifyBotDuelFailed(diagnostics, "scheduler-closed", rejected.toString());
             }
@@ -1020,6 +1070,7 @@ public class VelocityBotManager {
                 botRequestTokens.put(botUUID, requestToken);
                 botDiagnostics.put(botUUID, diagnostics);
                 botsByUsername.put(config.getUsername(), botUUID);
+                creatingTokens.remove(requestToken);
 
                 if (shuttingDown.get() || isRequestCancelled(requestToken)) {
                     cleanupBot(botUUID, null, true);
@@ -1035,6 +1086,7 @@ public class VelocityBotManager {
                         () -> runBotGameLoop(botUUID, bot, playerUUID, target, kitType, difficulty,
                                 requestToken, latencyMillis, retryCount, botUsername));
                 } catch (Exception e) {
+                    creatingTokens.remove(requestToken);
                     logger.error("Failed to start bot {}", botUsername, e);
                     cleanupBot(botUUID, null, true);
                     if (shuttingDown.get() || isRequestCancelled(requestToken)) {
@@ -1219,6 +1271,9 @@ public class VelocityBotManager {
             return;
         }
 
+        identityTimer.cancel();
+        identityGate.close();
+        creatingTokens.clear();
         Set<UUID> botUuids = new HashSet<>(botLoopHandles.keySet());
         botUuids.addAll(activeBots.keySet());
         logger.info("Stopping {} bot sessions before proxy shutdown", botUuids.size());

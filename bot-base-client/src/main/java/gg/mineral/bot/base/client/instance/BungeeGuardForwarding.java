@@ -43,6 +43,16 @@ public final class BungeeGuardForwarding {
 
     public String getForwardedIp() { return forwardedIp; }
 
+    /** Domain-separated control signing; callers never receive the forwarding secret. */
+    public byte[] signIdentityMessage(byte[] payload) {
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            mac.update("MineralBotIdentity/v1\0".getBytes(StandardCharsets.UTF_8));
+            return mac.doFinal(payload);
+        } catch (java.security.GeneralSecurityException e) { throw new IllegalStateException("Identity signing failed", e); }
+    }
+
     /** Wire semantics verified against Velocity PlayerDataForwarding (3.5 development branch). */
     public String createAddress(String host, GameProfile profile) {
         if (host == null || host.isBlank() || host.length() > 255 || host.indexOf('\0') >= 0) {

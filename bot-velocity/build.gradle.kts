@@ -45,6 +45,7 @@ tasks {
     }
 
     shadowJar {
+        exclude("META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA", "META-INF/*.EC")
         relocate("it.unimi.dsi.fastutil", "com.mineralstudios.bot.fastutil")
     }
 

@@ -58,6 +58,8 @@ sourceSets {
 }
 
 jar {
+    // Repacked dependencies no longer match their original signed manifests.
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'META-INF/*.EC'
     manifest {
         attributes 'Multi-Release': 'true'
     }
