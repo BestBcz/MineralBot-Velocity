@@ -10,13 +10,13 @@ import javax.crypto.spec.SecretKeySpec;
 
 /** Java 8 wire codec. Keep the identical source in the backend and proxy distributions. */
 public final class BotIdentityProtocol {
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;
     public static final String REGISTER = "BotIdentityRegister";
     public static final String READY = "BotIdentityReady";
     public static final String REJECTED = "BotIdentityRejected";
     public static final long MAX_AGE_MILLIS = 45000L;
     private static final int MAC_SIZE = 32;
-    private static final byte[] DOMAIN = "MineralBotIdentity/v1\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] DOMAIN = "MineralBotIdentity/v2\0".getBytes(StandardCharsets.UTF_8);
     private BotIdentityProtocol() { }
 
     public static byte[] sign(String secret, byte[] payload) {
@@ -37,7 +37,7 @@ public final class BotIdentityProtocol {
             this.botUuid=botUuid; this.name=name; this.timestamp=timestamp;
         }
         public void validate(long now) throws IOException {
-            if (id.version()!=4 || botUuid.version()!=4 || ownerUuid.equals(botUuid)
+            if (id.version()!=4 || !BotUuid.isBot(botUuid) || ownerUuid.equals(botUuid)
                     || !token.matches("[A-Z0-9]{6}") || !("_"+token).equals(name)
                     || server.isEmpty() || server.length()>64 || server.indexOf('\0')>=0
                     || timestamp < now-MAX_AGE_MILLIS || timestamp > now+5000L)

@@ -14,7 +14,7 @@ class BotRegistrationGateTest {
     private final AtomicLong clock=new AtomicLong(1000000L);
     private final Function<byte[],byte[]> signer=raw -> BotIdentityProtocol.sign(secret,raw);
     private BotIdentityProtocol.Registration registration() {
-        return new BotIdentityProtocol.Registration(UUID.randomUUID(),"ABC123",UUID.randomUUID(),"Micet",UUID.randomUUID(),"_ABC123",clock.get());
+        return new BotIdentityProtocol.Registration(UUID.randomUUID(),"ABC123",UUID.randomUUID(),"Micet",gg.mineral.bot.identity.BotUuid.create(),"_ABC123",clock.get());
     }
     @Test void doesNotConnectBeforeAuthenticatedMatchingAcknowledgement() throws Exception {
         BotRegistrationGate gate=new BotRegistrationGate(signer,clock::get);

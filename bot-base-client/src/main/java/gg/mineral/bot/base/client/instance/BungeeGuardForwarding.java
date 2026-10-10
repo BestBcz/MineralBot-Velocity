@@ -48,7 +48,7 @@ public final class BungeeGuardForwarding {
         try {
             javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
             mac.init(new javax.crypto.spec.SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            mac.update("MineralBotIdentity/v1\0".getBytes(StandardCharsets.UTF_8));
+            mac.update("MineralBotIdentity/v2\0".getBytes(StandardCharsets.UTF_8));
             return mac.doFinal(payload);
         } catch (java.security.GeneralSecurityException e) { throw new IllegalStateException("Identity signing failed", e); }
     }

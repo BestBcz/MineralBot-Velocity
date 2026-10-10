@@ -965,7 +965,7 @@ public class VelocityBotManager {
         }
 
         if (botRequestTokens.containsValue(requestToken) || !creatingTokens.add(requestToken)) return;
-        UUID botUUID = UUID.randomUUID();
+        UUID botUUID = gg.mineral.bot.identity.BotUuid.create();
         String botUsername = generateUniqueBotUsername(requestToken);
         BotSessionDiagnostics diagnostics =
                 new BotSessionDiagnostics(playerUUID, botUUID, botUsername, requestToken, retryCount);
@@ -978,7 +978,7 @@ public class VelocityBotManager {
             if (shuttingDown.get() || isRequestCancelled(requestToken)) { creatingTokens.remove(requestToken); return; }
             if (!accepted) {
                 creatingTokens.remove(requestToken);
-                notifyBotDuelFailed(diagnostics, "IDENTITY_REGISTRATION_FAILED", "No durable identity acknowledgement; bot was not connected.");
+                notifyBotDuelFailed(diagnostics, "IDENTITY_REGISTRATION_FAILED", "No authenticated identity acknowledgement; bot was not connected.");
                 return;
             }
             logger.info("Bot identity acknowledged uuid={}, server={}, registration={}", botUUID, target.name(), registration.id);
