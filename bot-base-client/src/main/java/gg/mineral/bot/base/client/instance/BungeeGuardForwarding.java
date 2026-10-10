@@ -26,18 +26,8 @@ public final class BungeeGuardForwarding {
             throw new IllegalArgumentException("FORWARDED_IP_INVALID");
         }
         String secret;
-        try {
-            secret = Files.readString(file, StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new IOException("SECRET_FILE_UNREADABLE");
-        }
-        if (secret.endsWith("\r\n")) secret = secret.substring(0, secret.length() - 2);
-        else if (secret.endsWith("\n")) secret = secret.substring(0, secret.length() - 1);
-        if (secret.isEmpty()) throw new IllegalArgumentException("SECRET_EMPTY");
-        if (secret.indexOf('\0') >= 0 || secret.indexOf('\r') >= 0 || secret.indexOf('\n') >= 0
-                || secret.getBytes(StandardCharsets.UTF_8).length > 8192) {
-            throw new IllegalArgumentException("SECRET_INVALID");
-        }
+        try { secret = gg.mineral.bot.identity.BotIdentityProtocol.readSecret(file); }
+        catch (IOException error) { throw new IOException("SECRET_FILE_UNREADABLE"); }
         return new BungeeGuardForwarding(secret, forwardedIp);
     }
 
@@ -45,12 +35,7 @@ public final class BungeeGuardForwarding {
 
     /** Domain-separated control signing; callers never receive the forwarding secret. */
     public byte[] signIdentityMessage(byte[] payload) {
-        try {
-            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
-            mac.init(new javax.crypto.spec.SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            mac.update("MineralBotIdentity/v2\0".getBytes(StandardCharsets.UTF_8));
-            return mac.doFinal(payload);
-        } catch (java.security.GeneralSecurityException e) { throw new IllegalStateException("Identity signing failed", e); }
+        return gg.mineral.bot.identity.BotIdentityProtocol.sign(secret, payload);
     }
 
     /** Wire semantics verified against Velocity PlayerDataForwarding (3.5 development branch). */

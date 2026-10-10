@@ -19,6 +19,16 @@ public final class BotIdentityProtocol {
     private static final byte[] DOMAIN = "MineralBotIdentity/v2\0".getBytes(StandardCharsets.UTF_8);
     private BotIdentityProtocol() { }
 
+    public static String readSecret(java.nio.file.Path path) throws IOException {
+        String key = new String(java.nio.file.Files.readAllBytes(path), StandardCharsets.UTF_8);
+        if (key.endsWith("\r\n")) key = key.substring(0, key.length() - 2);
+        else if (key.endsWith("\n")) key = key.substring(0, key.length() - 1);
+        if (key.isEmpty() || key.indexOf('\0') >= 0 || key.indexOf('\r') >= 0 || key.indexOf('\n') >= 0
+                || key.getBytes(StandardCharsets.UTF_8).length > 8192)
+            throw new IllegalArgumentException("SECRET_INVALID");
+        return key;
+    }
+
     public static byte[] sign(String secret, byte[] payload) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");

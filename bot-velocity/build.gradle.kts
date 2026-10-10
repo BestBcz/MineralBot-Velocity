@@ -25,6 +25,7 @@ dependencies {
 
     compileOnly("com.github.retrooper:packetevents-velocity:2.11.2")
     implementation(project(":bot-api"))
+    implementation(project(":bot-identity-contract"))
     implementation(project(":bot-shared-library"))
     implementation(project(":bot-base-client"))
     implementation(project(":bot-intelligence"))

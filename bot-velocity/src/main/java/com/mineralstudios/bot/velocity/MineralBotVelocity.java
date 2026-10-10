@@ -78,7 +78,7 @@ public class MineralBotVelocity {
         PacketEvents.getAPI().getEventManager().registerListener(new BotPacketDiagnosticsListener(botManager));
 
         logger.info(
-                "MineralBotVelocity has been initialized! connection-mode=direct-backend-bungeeguard, "
+                "MineralBotVelocity has been initialized! connection-mode=direct-backend-bungee-forwarding, "
                         + "game-loop-workers={}, timing-diagnostics={}, velocity-input-recovery-enabled={}",
                 config.gameLoopWorkers(),
                 config.timingDiagnostics(),
@@ -171,7 +171,7 @@ public class MineralBotVelocity {
         try {
             var forwarding = gg.mineral.bot.base.client.instance.BungeeGuardForwarding.load(
                     dataDirectory.resolve(file).normalize(), ip);
-            logger.info("BungeeGuard secret loaded");
+            logger.info("Forwarding secret loaded; signed bot admission v2");
             return forwarding;
         } catch (Exception e) {
             logger.error("Direct backend connections disabled: check bungeeguard-secret-file and bot-forwarded-ip.");

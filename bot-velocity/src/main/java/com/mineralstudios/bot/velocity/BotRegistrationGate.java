@@ -6,7 +6,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.*;
 
-/** No client may be created until an authenticated, matching durable-registration acknowledgement arrives. */
+/** A matching signed admission acknowledgement authorizes connection; no storage acknowledgement is required. */
 final class BotRegistrationGate implements AutoCloseable {
     private final Function<byte[], byte[]> signer;
     private final LongSupplier clock;

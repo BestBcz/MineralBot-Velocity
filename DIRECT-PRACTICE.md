@@ -16,7 +16,8 @@ bot-forwarded-ip=127.0.0.1
 secret 文件路径相对于 **MineralBot 插件数据目录**；默认路径指向 Velocity 工作目录的
 `forwarding.secret`。如主代理使用其他 secret 文件，请引用同一个文件，Windows 路径使用 `/`。
 不需要复制 token 到插件配置。文件不可读、为空或格式错误时，创建请求失败，不回退到普通握手。
-secret 仅启动时读取，轮换后重启主 Velocity。旧配置中的 `guide-enabled` 已不再读取，可以删除；保留也不影响启动。
+secret 同时用于 Micet 的签名 bot 准入；不是数据库身份登记。Micet 的 BotIdentity.SecretFile 指向内容相同的文件。
+本次不要求添加 BungeeGuard 插件；配置名和兼容的握手 token 属性保留。secret 仅启动时读取，轮换后重启主 Velocity 和后端。旧配置中的 `guide-enabled` 已不再读取，可以删除；保留也不影响启动。
 
 跨机器时可将 `bot-forwarded-ip` 改为 Bot 宿主机的内网 IP；它是转发给插件看的身份地址，
 不是 socket 绑定地址，也不会自动改变防火墙规则。
@@ -24,14 +25,15 @@ secret 仅启动时读取，轮换后重启主 Velocity。旧配置中的 `guide
 Practice 配置必须满足：
 
 - `spigot.yml` 的 `settings.bungeecord=true`，后端 `server.properties` 的 `online-mode=false`。
-- BungeeGuard 保持启用，`allowed-tokens` 包含上述主 Velocity secret。
+- 若已有 BungeeGuard，其 `allowed-tokens` 必须包含上述 secret；没有使用它的部署不新增该插件。
 - Practice 的 `config.yml` 中的 `ServerName`（默认 `micet`） 必须与主 Velocity 注册的服务器名一致；请求目标必须是发送请求的后端。
 - 后端只允许可信宿主机经内网访问；保持现有网络隔离。
 
 ## 生命周期兼容
 
 已核对 Micet-PotPvP 的 BotDuelHandler、BotDuelListener 和 BotNavigationTask。
-Practice 按现有请求 token 对应的 Bot 名称匹配入服者，实际 UUID 来自转发握手。
+Practice 校验签名请求的 token、发起者、服务器与确切 Bot UUID，登录必须匹配该绑定；实际 UUID 来自转发握手。
+存储绕过通过共享 bot-identity-contract 的专用 UUID 规则实现，不等待 AquaCore 注册或胜场初始化。
 BotRequestAccepted / BotRequestCancelled / BotDisconnect 可能通过任意在线玩家发送。
 因此客户端接收到 MineralBot 控制消息时，会调用同一个内部管理器；通过真人玩家连接到达的
 消息仍由 Velocity 处理。BotDuelStarted 继续分配对局目标和友方 UUID；实体状态来自原版游戏数据包。
@@ -44,7 +46,7 @@ BotRequestAccepted / BotRequestCancelled / BotDisconnect 可能通过任意在�
 secret 校验及握手长度限制。它们不替代真实 Practice 入服测试。
 
 1. 将构建的 `bot-velocity/build/libs/*-all.jar` 放到主 Velocity，设置 secret 文件路径并重启。
-2. 确认日志出现 `BungeeGuard secret loaded`，从 Practice 发起一次 BotDuel。
+2. 确认日志出现 `Forwarding secret loaded; signed bot admission v2`，从 Practice 发起一次 BotDuel。
 3. 检查日志目标为 Practice 注册地址，观察 `DIRECT_LOGIN_SUCCESS` / `DIRECT_JOIN_GAME` 阶段，
    以及 BotRequestAccepted、BotDuelStarted 和正常对战；Bot 不应出现在主 Velocity 玩家列表。
 4. 检查结束对战、取消请求、真人离开、后端踢出/重启后的连接与临时目录清理。

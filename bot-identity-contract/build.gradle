@@ -1,0 +1,13 @@
+// A dependency-free contract usable by the Java 8 backend and Java 21 proxy.
+version = '1.0.0'
+tasks.withType(JavaCompile).configureEach {
+    sourceCompatibility = '8'
+    targetCompatibility = '8'
+    options.release = 8
+}
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+tasks.withType(Test).configureEach { useJUnitPlatform() }
+publishing.publications.mavenJava.version = project.version

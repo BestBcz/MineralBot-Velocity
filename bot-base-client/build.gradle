@@ -11,6 +11,7 @@ repositories {
 }
 
 dependencies {
+    implementation project(':bot-identity-contract')
     compileOnly project(':bot-api')
     implementation project(':bot-lwjgl-bridge')
     implementation project(':bot-shared-library')

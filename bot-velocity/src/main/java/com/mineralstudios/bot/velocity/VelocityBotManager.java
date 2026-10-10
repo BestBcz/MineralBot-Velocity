@@ -134,7 +134,7 @@ public class VelocityBotManager {
         this.loopScheduler = new BotLoopScheduler(gameLoopWorkers, startupWorkers);
 
         logger.info(
-                "VelocityBotManager initialized (connection-mode=direct-backend-bungeeguard, game-loop-workers={}, "
+                "VelocityBotManager initialized (connection-mode=direct-backend-bungee-forwarding, game-loop-workers={}, "
                         + "startup-workers={}, timing-diagnostics={}, velocity-input-recovery-enabled={})",
                 gameLoopWorkers,
                 startupWorkers,
@@ -759,7 +759,7 @@ public class VelocityBotManager {
             }
             rejected.setControlSender(payload -> source.sendPluginMessage(MineralBotVelocity.MINERAL_BOT_CHANNEL, payload));
             if (identityVersion != gg.mineral.bot.identity.BotIdentityProtocol.VERSION) {
-                notifyBotDuelFailed(rejected, "IDENTITY_PROTOCOL_REQUIRED", "Upgrade MicetPvP and AquaCore before creating bots.");
+                notifyBotDuelFailed(rejected, "IDENTITY_PROTOCOL_REQUIRED", "Upgrade MicetPvP to the matching bot admission protocol before creating bots.");
                 return;
             }
             var address = registered.getServerInfo().getAddress();
@@ -981,7 +981,7 @@ public class VelocityBotManager {
                 notifyBotDuelFailed(diagnostics, "IDENTITY_REGISTRATION_FAILED", "No authenticated identity acknowledgement; bot was not connected.");
                 return;
             }
-            logger.info("Bot identity acknowledged uuid={}, server={}, registration={}", botUUID, target.name(), registration.id);
+            logger.info("Bot admission authenticated uuid={}, server={}, registration={}", botUUID, target.name(), registration.id);
             try {
                 startRegisteredBot(botUUID, botUsername, playerUUID, target, kitType, difficulty, requestToken, latencyMillis, retryCount, diagnostics);
             } catch (RuntimeException e) {
