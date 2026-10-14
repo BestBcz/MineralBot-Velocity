@@ -55,6 +55,9 @@ interface ClientInstance : EventHandler {
     val matchTargetUuid: UUID?
         get() = null
 
+    val bedFightState: gg.mineral.bot.api.navigation.BedFightState?
+        get() = navigationContext?.bedFightState
+
     /**
      * Gets the keyboard.
      *

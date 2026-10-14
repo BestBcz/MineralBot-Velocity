@@ -321,11 +321,14 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         val self = buildPlayerState(fakePlayer, fakePlayer, tick, true)
         val enemies = mutableListOf<PlayerState>()
         val projectiles = mutableListOf<ProjectileState>()
+        val bedFight = clientInstance.bedFightState
+        val aliveBedFightPlayers = bedFight?.opponents?.filter { it.life==gg.mineral.bot.api.navigation.BedFightLife.ALIVE }?.map { it.uuid }?.toSet()
 
         for (entity in world.entities) {
             if (entity is ClientPlayer &&
                 entity.uuid != fakePlayer.uuid &&
-                !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid)
+                !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid) &&
+                (aliveBedFightPlayers==null || entity.uuid in aliveBedFightPlayers)
             ) {
                 enemies.add(buildPlayerState(entity, fakePlayer, tick, false))
                 continue

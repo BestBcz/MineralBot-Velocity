@@ -37,11 +37,12 @@ enum class BlockActionKind { BREAK, PLACE }
 enum class PlacementStyle { AUTO, BRIDGE, STEP, TOWER }
 data class BlockAction(val kind: BlockActionKind, val pos: BlockPos,
                        val blockId: Int, val metadata: Int = 0, val slot: Int = -1,
-                       val placement: PlacementStyle = PlacementStyle.AUTO)
+                       val placement: PlacementStyle = PlacementStyle.AUTO, val aimPoint: NavVec? = null)
 enum class ActionStatus { IDLE, WAITING, EXECUTING, CONFIRMED, FAILED }
 data class NavigationState(val position: NavVec, val yaw: Float, val onGround: Boolean,
                            val inWater: Boolean, val air: Int, val width: Double = 0.6,
-                           val height: Double = 1.8, val velocity: NavVec = NavVec(0.0, 0.0, 0.0))
+                           val height: Double = 1.8, val velocity: NavVec = NavVec(0.0, 0.0, 0.0),
+                           val eyeHeight: Double = 1.62)
 data class BuildingMaterial(val id: Int, val metadata: Int, val slot: Int, val count: Int)
 
 data class NavigationCombatState(val protected: Boolean = false,
@@ -62,6 +63,7 @@ interface NavigationSearchBudget {
 /** Minecraft adapters own interaction/confirmation. Search never mutates the live world. */
 interface NavigationContext {
     val world: NavigationWorld
+    val bedFightState: BedFightState? get() = null
     val searchBudget: NavigationSearchBudget get() = NavigationSearchBudget.UNLIMITED
     val actionOverheadTicks: Double get() = 4.0
     val actionDiagnostic: String get() = actionStatus().name
@@ -72,6 +74,7 @@ interface NavigationContext {
     fun requestAction(action: BlockAction): ActionStatus
     fun actionStatus(): ActionStatus
     fun tickAction()
+    fun completeAction() = cancelAction()
     fun cancelAction()
     fun reset()
 }

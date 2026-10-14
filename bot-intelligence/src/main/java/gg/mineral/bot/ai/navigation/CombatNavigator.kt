@@ -36,6 +36,10 @@ class CombatNavigator(private val context: NavigationContext) {
     var failedActions = 0; private set
     var lastActionFailure = ""; private set
     private var navigationStartedTick = -1
+    private var blockedTicks = 0
+    private var lastBlockedTick = -1
+    private var interactionTargets = emptySet<BlockPos>()
+    private var confirmedBridge: BlockPos? = null
 
     fun pause() {
         if (ownsMovement || action != null) context.cancelAction()
@@ -46,21 +50,26 @@ class CombatNavigator(private val context: NavigationContext) {
         lastPosition = null; localDestination = null; lastTick = -1
         goal = null; plannedGoal = null; retryTick = 0; failures = 0
         navigationStartedTick = -1
+        blockedTicks = 0; lastBlockedTick = -1; interactionTargets = emptySet()
+        confirmedBridge=null
     }
     fun reset() { pause(); targetId = null; excluded.clear() }
 
-    private fun combat(state: NavigationState): Boolean {
+    private fun combat(state: NavigationState, resetDelay: Boolean = true): Boolean {
         if (ownsMovement || action != null) context.cancelAction()
         context.searchBudget.cancel(budgetOwner)
         search = null; route.clear(); action = null; preview = false; localDestination = null
+        confirmedBridge=null
         ownsMovement = false; failures = 0; retryTick = 0; navigationStartedTick = -1
         context.maintainBuoyancy(state.inWater)
         diagnostic = "combat"
+        if (resetDelay) { blockedTicks = 0; lastBlockedTick = -1 }
         return false
     }
 
     fun update(tick: Int, target: NavVec?, range: Double, lineOfSight: Boolean, canUseItems: Boolean,
-               combatState: NavigationCombatState = NavigationCombatState()): Boolean {
+               combatState: NavigationCombatState = NavigationCombatState(),
+               interactionBlocks: Set<BlockPos> = emptySet()): Boolean {
         if (tick == lastTick) return ownsMovement
         lastTick = tick
         steeringYaw = null; preparingJump = false
@@ -68,12 +77,13 @@ class CombatNavigator(private val context: NavigationContext) {
         val here = state.position
         val geometry = NavigationGeometry(context.world, state.width, state.height)
         if (!state.inWater) context.maintainBuoyancy(false)
-        if (combatState.targetId != targetId) {
+        if (combatState.targetId != targetId || interactionTargets != interactionBlocks) {
             context.searchBudget.cancel(budgetOwner)
             if (ownsMovement || action != null) context.cancelAction()
             search = null; route.clear(); action = null; preview = false; localDestination = null
             goal = null; plannedGoal = null; failures = 0; retryTick = 0
             targetId = combatState.targetId
+            interactionTargets = interactionBlocks.toSet(); blockedTicks = 0; lastBlockedTick = -1
         }
         lastPosition?.let { previous ->
             if (hypot(here.x-previous.x, here.z-previous.z)>3.0 || abs(here.y-previous.y)>3.0) {
@@ -98,24 +108,34 @@ class CombatNavigator(private val context: NavigationContext) {
             ownsMovement = state.inWater
             if (state.inWater) context.move(setOf(Key.Type.KEY_SPACE))
             diagnostic = if (state.inWater) "floating" else "idle"
+            blockedTicks = 0; lastBlockedTick = -1
             return ownsMovement
         }
         val distance = sqrt((here.x-target.x).pow(2)+(here.y-target.y).pow(2)+(here.z-target.z).pow(2))
-        if (lineOfSight && distance<=max(3.0,range) && abs(here.y-target.y)<1.0) return combat(state)
+        val entityPursuit = interactionBlocks.isEmpty()
+        if (entityPursuit && lineOfSight && distance<=max(NavigationTuning.COMBAT_MIN_RANGE,range) &&
+            abs(here.y-target.y)<=NavigationTuning.COMBAT_HEIGHT) return combat(state)
         if (!state.inWater && !state.onGround && action == null && !ownsMovement &&
-            (combatState.protected || combatState.preserveOpenMovement)) return combat(state)
+            entityPursuit && (combatState.protected || combatState.preserveOpenMovement)) return combat(state)
         // Open combat pursuit checks a short supported corridor, including targets currently airborne.
         val scale = (2.0/hypot(target.x-here.x,target.z-here.z).coerceAtLeast(0.01)).coerceAtMost(1.0)
         val pursuitEnd = if(combatState.preserveOpenMovement && lineOfSight)
             NavVec(here.x+(target.x-here.x)*scale,here.y,here.z+(target.z-here.z)*scale) else target
-        val openPursuit = !state.inWater && abs(here.y-target.y)<=1.25 &&
+        val openPursuit = entityPursuit && !state.inWater && abs(here.y-target.y)<=1.25 &&
             geometry.clear(target,emptyMap()) && geometry.walk(here,pursuitEnd,emptyMap())
         if (openPursuit && (combatState.preserveOpenMovement || combatState.protected)) return combat(state)
+
+        if (entityPursuit && !state.inWater && !ownsMovement && action == null &&
+            (combatState.protected || combatState.preserveOpenMovement)) {
+            blockedTicks = if (lastBlockedTick == tick-1) blockedTicks+1 else 1
+            lastBlockedTick = tick
+            if (blockedTicks<NavigationTuning.TAKEOVER_TICKS) return combat(state,resetDelay=false)
+        }
 
         if (navigationStartedTick<0) { navigationStartedTick = tick; firstMovementDelayTicks = -1; firstRouteDelayTicks = -1 }
         if (lastPosition == null) { lastPosition = here; progressTick = tick }
         excluded.entries.removeIf { tick>=it.value }
-        goal = NavigationGoal(target,range.coerceIn(0.3,3.0))
+        goal = NavigationGoal(target,if(entityPursuit) range.coerceIn(0.3,3.0) else BlockInteraction.REACH,interactionBlocks)
         if (allowEdits != canUseItems) {
             context.searchBudget.cancel(budgetOwner)
             if (action != null) { context.cancelAction(); action = null }
@@ -131,7 +151,8 @@ class CombatNavigator(private val context: NavigationContext) {
             when (context.actionStatus()) {
                 ActionStatus.CONFIRMED -> {
                     val completed = action!!
-                    context.cancelAction(); action = null; search = null
+                    confirmedBridge=completed.pos.takeIf { completed.kind==BlockActionKind.PLACE && completed.placement==PlacementStyle.BRIDGE }
+                    context.completeAction(); action = null; search = null
                     val step = route.removeFirstOrNull()
                     if (step != null) route.addFirst(step.copy(actions = step.actions.filterNot { it == completed }))
                     progressTick = tick; lastPosition = here; failures = 0
@@ -146,6 +167,18 @@ class CombatNavigator(private val context: NavigationContext) {
                 else -> { ownsMovement = true; diagnostic = "block action: "+context.actionDiagnostic; return true }
             }
         }
+        if (!entityPursuit && canUseItems && tick>=retryTick) {
+            val next = BlockInteraction.findAction(context.world,state,interactionBlocks,excluded=excluded.keys)
+            if (next!=null) {
+                context.searchBudget.cancel(budgetOwner)
+                search=null; route.clear(); preview=false; localDestination=null
+                route.addFirst(RouteStep(here,Traversal.WALK,listOf(next)))
+                context.move(emptySet()); action=next
+                context.requestAction(next); context.tickAction()
+                ownsMovement=true; diagnostic="bed action: "+context.actionDiagnostic
+                return true
+            }
+        }
         if (openPursuit) {
             context.searchBudget.cancel(budgetOwner)
             route.clear(); search = null
@@ -155,7 +188,8 @@ class CombatNavigator(private val context: NavigationContext) {
         }
         consumeReached(tick,state)
         val changedGoal = plannedGoal?.let {
-            hypot(it.position.x-target.x,it.position.z-target.z)>2.0 || abs(it.position.y-target.y)>2.0
+            hypot(it.position.x-target.x,it.position.z-target.z)>2.0 || abs(it.position.y-target.y)>2.0 ||
+                it.interactionBlocks!=interactionBlocks
         } ?: true
         if (changedGoal && tick-lastPlanTick>=4) search = null
         if (tick>=retryTick && (search != null || route.isEmpty() || changedGoal && tick-lastPlanTick>=4)) {
@@ -207,10 +241,11 @@ class CombatNavigator(private val context: NavigationContext) {
         while (route.isNotEmpty()) {
             val next = route.first()
             if (next.actions.isNotEmpty() || next.traversal==Traversal.TOWER && !state.onGround) break
-            if (hypot(state.position.x-next.position.x,state.position.z-next.position.z)>0.4 ||
+            val threshold=if(confirmedBridge?.let { next.position==NavVec(it.x+0.5,it.y+1.0,it.z+0.5) }==true) 0.6 else 0.4
+            if (hypot(state.position.x-next.position.x,state.position.z-next.position.z)>threshold ||
                 abs(state.position.y-next.position.y)>0.3 &&
                 !(next.traversal==Traversal.SWIM && state.position.y>=next.position.y-0.3)) break
-            route.removeFirst(); progressTick = tick; lastPosition = state.position; failures = 0
+            route.removeFirst(); confirmedBridge=null; progressTick = tick; lastPosition = state.position; failures = 0
         }
     }
 
@@ -236,7 +271,7 @@ class CombatNavigator(private val context: NavigationContext) {
                 hypot(it.x-goal!!.position.x,it.z-goal!!.position.z)>goal!!.range || abs(it.y-goal!!.position.y)>1.0
             }
             if (remaining != null && remaining.isNotEmpty() &&
-                (mustReplace || remaining.sumOf { it.estimatedTicks }<route.sumOf { it.estimatedTicks }*0.8)) {
+                (mustReplace || remaining.sumOf { it.selectionCost }<route.sumOf { it.selectionCost }*0.8)) {
                 route.clear(); route.addAll(remaining); preview = false; localDestination = null
                 if (firstRouteDelayTicks<0) firstRouteDelayTicks = tick-navigationStartedTick
             } else if (route.isEmpty()) retry(tick)

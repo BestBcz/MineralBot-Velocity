@@ -31,6 +31,10 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
     private var failureReason=""
     override val actionDiagnostic get()=if(status==ActionStatus.FAILED) failureReason else phase.name
     private var tower: TowerPlacement?=null
+    private var bridge: BridgePlacement?=null
+    private var bridgeChain: BlockAction?=null
+    private var bridgeDirection: Pair<Int,Int>?=null
+    private var bridgeCautious=false
     private var supportPos: BlockPos?=null
     private var supportFace=-1
     private var expectedDigTicks=0
@@ -38,6 +42,8 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
     private val toolCache=HashMap<Pair<Int,Float>,Pair<Int,Double>>()
     private var toolSignature=0
     private val permissions=NavigationPermissionStore()
+    private val bedFight=BedFightStateStore()
+    override val bedFightState: BedFightState? get() { pump(); return bedFight.current(permissions.permissions) }
     private val payloads=ConcurrentLinkedQueue<ByteArray>()
     private val pendingBinding=AtomicReference<String?>()
     private var blockRevision=0L
@@ -65,7 +71,7 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
     fun changed() { blocks.clear(); blockRevision++ }
     fun pump() {
         pendingBinding.getAndSet(null)?.let { token ->
-            cancelAction(); permissions.bind(token); blocks.clear(); blockRevision++
+            cancelAction(); permissions.bind(token); bedFight.bind(token); blocks.clear(); blockRevision++
         }
         orphanedSwaps.removeIf { token ->
             if(instance.inventoryTransactionStatus(token)!=InventoryTransactionStatus.PENDING) { instance.forgetInventoryTransaction(token); true } else false
@@ -74,11 +80,16 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
             val previousWorld=nativeWorld
             nativeWorld=instance.theWorld; cancelAction(); blocks.clear(); blockRevision++
             // New connections are explicitly bound by BotDuelStarted.
-            if(nativeWorld==null) { permissions.bind(""); payloads.clear() }
-            else if(previousWorld!=null) { permissions.bind(permissions.token); payloads.clear() }
+            if(nativeWorld==null) { permissions.bind(""); bedFight.bind(""); payloads.clear() }
+            else if(previousWorld!=null) { permissions.bind(permissions.token); bedFight.bind(permissions.token); payloads.clear() }
         }
         val old=permissions.permissions
-        while(true) permissions.receive(payloads.poll()?:break)
+        while(true) {
+            val payload=payloads.poll()?:break
+            val kind=try { java.io.DataInputStream(java.io.ByteArrayInputStream(payload)).readUTF() } catch (_: Exception) { continue }
+            if(kind==BedFightStateWire.CHANNEL) bedFight.receive(payload,permissions.permissions)
+            else permissions.receive(payload)
+        }
         if(old?.copy(revision=0)!=permissions.permissions?.copy(revision=0)) { blocks.clear(); blockRevision++ }
         if(cachedTick!=instance.currentTick) {
             cachedTick=instance.currentTick
@@ -101,7 +112,7 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         pump(); val p=instance.thePlayer ?: return NavigationState(NavVec(0.0,0.0,0.0),0f,false,false,300)
         val b=p.boundingBox
         return NavigationState(NavVec(p.posX,b.minY,p.posZ),p.rotationYaw,p.onGround,p.isInWater,p.air,
-            b.maxX-b.minX,b.maxY-b.minY,NavVec(p.motionX,p.motionY,p.motionZ))
+            b.maxX-b.minX,b.maxY-b.minY,NavVec(p.motionX,p.motionY,p.motionZ),p.posY-b.minY)
     }
     override fun block(pos: BlockPos): NavBlock? {
         if(blocks.containsKey(pos)) return withTool(pos,blocks[pos])
@@ -184,7 +195,18 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
     override fun requestAction(action: BlockAction): ActionStatus {
         pump()
         if(this.action==action && status !in setOf(ActionStatus.IDLE,ActionStatus.FAILED)) return status
+        val previousDirection=bridgeDirection
+        val previousBridge=bridgeChain
+        val continuation=previousBridge?.takeIf { previous -> action.placement==PlacementStyle.BRIDGE &&
+            previous.blockId==action.blockId && previous.metadata==action.metadata && previous.pos.y==action.pos.y &&
+            abs(previous.pos.x-action.pos.x)+abs(previous.pos.z-action.pos.z)==1 &&
+            previousDirection==Pair(action.pos.x-previous.pos.x,action.pos.z-previous.pos.z) }
         cancelAction(); this.action=action; startedTick=instance.currentTick; actionId++
+        bridgeCautious=previousBridge!=null && continuation==null
+        if(continuation!=null) { supportPos=continuation.pos; supportFace=when {
+            action.pos.x>continuation.pos.x -> 5; action.pos.x<continuation.pos.x -> 4
+            action.pos.z>continuation.pos.z -> 3; else -> 2
+        } }
         phase=Phase.AUTHORIZE; phaseTick=startedTick; failureReason=""; lastActionTick=-1
         expectedDigTicks=if(action.kind==BlockActionKind.BREAK) block(action.pos)?.breakTicks?.takeIf { it.isFinite() }?.toInt()?.coerceIn(0,200)?:0 else 0
         val p=instance.thePlayer
@@ -290,7 +312,8 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
             }
             return
         }
-        if(reply!=1) return
+        val fastBridge=a.kind==BlockActionKind.PLACE && a.placement==PlacementStyle.BRIDGE
+        if(reply!=1 && !fastBridge) return
         if(phase==Phase.AUTHORIZE) phase(Phase.SLOT)
         // Advance flight even if a ray or inventory preparation is temporarily unavailable.
         val towerMotion=if(tower!=null && phase==Phase.EXECUTE && !clicked) tower!!.update(state(),false,false) else null
@@ -299,7 +322,10 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
             instance.keyboard.unpressKey(Key.Type.KEY_SPACE); ownsJump=false
         }
         // A click is issued once. Confirmation waits must never re-enter jump or edge positioning.
-        if(clicked) { phase(Phase.CONFIRM); return }
+        if(clicked) {
+            if(fastBridge) { instance.keyboard.pressKey(Key.Type.KEY_LSHIFT); ownsSneak=true; move(emptySet()) }
+            phase(Phase.CONFIRM); return
+        }
         if(!prepareSlot(a)) return
         if(phase==Phase.SLOT) phase(Phase.POSITION)
 
@@ -326,6 +352,14 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
                 }
                 if(ownsSneak) instance.keyboard.unpressKey(Key.Type.KEY_LSHIFT)
                 ownsSneak=false; move(emptySet()); phase(Phase.AIM)
+            } else if(fastBridge && support.y==pos.y) {
+                if(bridge==null) bridge=BridgePlacement(support,pos,::confirmedFootprint,bridgeCautious)
+                val motion=bridge!!.update(state(),false)
+                if(motion.failed) { fail("bridge footing changed"); return }
+                if(motion.sneak) { instance.keyboard.pressKey(Key.Type.KEY_LSHIFT); ownsSneak=true }
+                else { if(ownsSneak) instance.keyboard.unpressKey(Key.Type.KEY_LSHIFT); ownsSneak=false }
+                if(!motion.ready) steerTo(motion.destination.x,motion.destination.z) else move(emptySet())
+                phase(Phase.AIM)
             } else if(tower==null) {
                 instance.keyboard.pressKey(Key.Type.KEY_LSHIFT); ownsSneak=true
                 if(phase==Phase.POSITION && pos.y+1<=p.boundingBox.minY+0.05 && support.y==pos.y) {
@@ -344,7 +378,7 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
             if(phase==Phase.POSITION) phase(Phase.AIM)
         }
 
-        val center=faceCenter(support,face)
+        val center=a.aimPoint?.let { Vec3.createVectorHelper(it.x,it.y,it.z) } ?: faceCenter(support,face)
         // posY already includes the legacy client's eye offset.
         val dx=center.xCoord-p.posX; val dy=center.yCoord-p.posY; val dz=center.zCoord-p.posZ
         if(sqrt(dx*dx+dy*dy+dz*dz)>4.5) { fail("support outside reach"); return }
@@ -355,7 +389,8 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         // Check the actual applied rotation, not a stale render hit or a queued mouse delta.
         instance.entityRenderer.getMouseOver(1.0f)
         val hit=instance.objectMouseOver
-        val aimed=abs(wrap(yaw-p.rotationYaw))<1.5 && abs(pitch-p.rotationPitch)<1.5 &&
+        val tolerance=if(fastBridge) 5.0 else 1.5
+        val aimed=abs(wrap(yaw-p.rotationYaw))<tolerance && abs(pitch-p.rotationPitch)<tolerance &&
             hit?.typeOfHit==MovingObjectPosition.MovingObjectType.BLOCK &&
             hit.blockX==support.x && hit.blockY==support.y && hit.blockZ==support.z &&
             (face<0 || hit.sideHit==face)
@@ -363,6 +398,7 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
             if(a.kind==BlockActionKind.BREAK && ownsMouse) instance.mouse.unpressButton(MouseButton.Type.LEFT_CLICK)
             return
         }
+        if(fastBridge && (reply!=1 || bridge!=null && bridge!!.update(state(),false).ready!=true)) return
         if(tower!=null) {
             phase(Phase.EXECUTE)
             when(towerMotion?:tower!!.update(state(),false,false)) {
@@ -398,6 +434,23 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         ownsMouse=false; ownsAim=false; ownsSneak=false; ownsJump=false
     }
     private fun fail(reason: String="inventory preparation failed") { move(emptySet()); release(); failureReason=reason; status=ActionStatus.FAILED }
+    private fun confirmedFootprint(point: NavVec,width: Double): Boolean {
+        val radius=width/2+0.015
+        for(dx in listOf(-radius,0.0,radius)) for(dz in listOf(-radius,0.0,radius)) {
+            val x=point.x+dx; val z=point.z+dz
+            val pos=BlockPos.at(x,point.y-0.02,z)
+            // A locally predicted placement is not support until reply 2 has arrived.
+            if(pos==action?.pos && status!=ActionStatus.CONFIRMED) return false
+            val b=block(pos) ?: return false
+            if(b.hazardous || b.boxes.none { abs(it.maxY-point.y)<0.06 && x>=it.minX && x<=it.maxX && z>=it.minZ && z<=it.maxZ }) return false
+        }
+        return true
+    }
+    override fun completeAction() {
+        val completed=action?.takeIf { status==ActionStatus.CONFIRMED && it.placement==PlacementStyle.BRIDGE }
+        val direction=completed?.let { a -> supportPos?.let { p -> Pair(a.pos.x-p.x,a.pos.z-p.z) } }
+        cancelAction(); bridgeChain=completed; bridgeDirection=direction
+    }
     override fun cancelAction() {
         val previous=action
         if(previous!=null && status !in setOf(ActionStatus.IDLE,ActionStatus.CONFIRMED)) {
@@ -408,7 +461,8 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         move(emptySet())
         release(); swapToken?.let { if(instance.inventoryTransactionStatus(it)!=InventoryTransactionStatus.PENDING) instance.forgetInventoryTransaction(it) else orphanedSwaps.add(it) }
         swapToken=null; selectedSlot=-1; clicked=false; action=null; status=ActionStatus.IDLE
-        tower=null; supportPos=null; supportFace=-1; buoyancyHeld=false
+        tower=null; bridge=null; bridgeChain=null; bridgeDirection=null; bridgeCautious=false
+        supportPos=null; supportFace=-1; buoyancyHeld=false
     }
-    override fun reset() { cancelAction(); pendingBinding.set(null); permissions.bind(""); payloads.clear(); blocks.clear(); blockRevision++ }
+    override fun reset() { cancelAction(); pendingBinding.set(null); permissions.bind(""); bedFight.bind(""); payloads.clear(); blocks.clear(); blockRevision++ }
 }

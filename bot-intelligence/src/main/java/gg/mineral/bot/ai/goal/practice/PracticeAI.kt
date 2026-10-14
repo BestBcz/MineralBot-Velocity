@@ -30,6 +30,9 @@ object PracticeAI {
         val normalizedKit = kitType.lowercase().replace(" ", "").replace("_", "")
 
         return when {
+            normalizedKit.contains("bedfight") -> arrayOf(
+                SelectKitGoal(clientInstance), ReplaceArmorGoal(clientInstance),
+                EatGappleGoal(clientInstance), SafeEatGoal(clientInstance), BedFightGoal(clientInstance))
             normalizedKit.contains("nodebuff") || normalizedKit.contains("nomisplace") ->
                     getNoDebuffGoals(clientInstance)
             normalizedKit.contains("debuff") -> getDebuffGoals(clientInstance)

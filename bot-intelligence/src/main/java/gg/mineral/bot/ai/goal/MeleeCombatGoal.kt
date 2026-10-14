@@ -14,9 +14,9 @@ import gg.mineral.bot.api.inv.item.Item
 import gg.mineral.bot.api.screen.type.ContainerScreen
 import gg.mineral.bot.api.world.block.Block
 
-class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance) {
-    private val perception = CombatPerception(clientInstance)
-    private val navigator = clientInstance.navigationContext?.let { gg.mineral.bot.ai.navigation.CombatNavigator(it) }
+open class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance) {
+    protected val perception = CombatPerception(clientInstance)
+    protected val navigator = clientInstance.navigationContext?.let { gg.mineral.bot.ai.navigation.CombatNavigator(it) }
     private val navigationProtection = gg.mineral.bot.ai.navigation.CombatNavigationProtection { timeMillis() }
     private var lastNavigationLogTick = -200
     private var target: ClientPlayer? = null
@@ -40,11 +40,26 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     private var smoothedTargetVelZ = 0.0
     override fun shouldExecute() = true
 
+    protected open val preferMatchTarget: Boolean get() = true
+    protected val combatProtected: Boolean get() = navigationProtection.active
+    protected open fun updateObjective(): Boolean = false
+    protected open fun chooseCombatTarget(snapshot: CombatPerception.Snapshot,range: Double): CombatPerception.PlayerState? =
+        snapshot.bestTargetState(target,range)
+    protected fun setCombatTarget(state: CombatPerception.PlayerState?) {
+        if (state!=null) noteTargetState(state)
+        if (target!==state?.entity) { lastTargetSwitchTick=clientInstance.currentTick; target=state?.entity }
+    }
+    protected fun clearCombatMemory() {
+        target=null; lastSeenTargetTick=-200; navigationProtection.clear()
+        recentHitsOnTarget=0; recentHitsTaken=0; forwardSuppressedUntilTick=-1
+        releaseStrafe()
+    }
+
     private fun findTarget() {
         val targetSearchRange = clientInstance.configuration.targetSearchRange
         val snapshot = perception.snapshot()
 
-        if (clientInstance.currentTick - lastTargetSwitchTick < 20) {
+        if (preferMatchTarget && clientInstance.currentTick - lastTargetSwitchTick < 20) {
             val currentTarget = target
             val currentTargetState = snapshot.stateFor(currentTarget)
             val matchTargetUuid = clientInstance.matchTargetUuid
@@ -56,7 +71,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
             }
         }
 
-        val targetState = snapshot.bestTargetState(target, targetSearchRange.toDouble())
+        val targetState = chooseCombatTarget(snapshot, targetSearchRange.toDouble())
         if (targetState != null) {
             noteTargetState(targetState)
         }
@@ -382,7 +397,9 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
                                 ))
                         .toLong()
 
-        if (target == null) return
+        val attacked = target ?: return
+        if (fakePlayer.distance3DTo(attacked)<=clientInstance.configuration.reach+0.35)
+            navigationProtection.attacking(attacked.uuid)
         pressButton(25, MouseButton.Type.LEFT_CLICK)
     }
 
@@ -587,6 +604,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     private fun shouldYieldMovementToUtility(): Boolean = clientInstance.blocksContinuousMovement
 
     override fun onTick(tick: Tick) {
+        navigationProtection.observeHealth(clientInstance.fakePlayer.health)
+        if (updateObjective()) return
         val yieldingInventoryControl = shouldYieldInventoryControl()
         val yieldingAimControl = shouldYieldAimControl()
         val yieldingMovement = shouldYieldMovementToUtility()
@@ -640,6 +659,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
 
     fun onEntityHurt(event: EntityHurtEvent): Boolean {
         if (event.attackedEntity.uuid == clientInstance.fakePlayer.uuid) navigationProtection.hurt()
+        navigationProtection.hitFeedback(event.attackedEntity.uuid,clientInstance.latency)
         if (clientInstance.currentTick - lastSprintResetTick < 9) return false
 
         val entity = event.attackedEntity
@@ -665,6 +685,8 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
     }
 
     public override fun onGameLoop() {
+        navigationProtection.observeHealth(clientInstance.fakePlayer.health)
+        if (updateObjective()) return
         if (!shouldYieldMovementToUtility()) {
             applyHumanizedMovement()
         } else {
@@ -688,7 +710,7 @@ class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInst
                 ?: if (remembered) gg.mineral.bot.api.navigation.NavVec(lastKnownTargetX, lastKnownTargetY, lastKnownTargetZ) else null
             val clearSight = snapshot.stateFor(target)?.lineOfSightLikelyClear == true
             val navigating = navigator.update(clientInstance.currentTick, navigationTarget,
-                if (remembered) 0.5 else clientInstance.configuration.reach + 0.35, clearSight,
+                if (remembered) 0.5 else clientInstance.configuration.reach + gg.mineral.bot.ai.navigation.NavigationTuning.COMBAT_REACH_MARGIN, clearSight,
                 !clientInstance.hasActiveSporadicGoal &&
                     (!clientInstance.blocksContinuousInventory || navigator.ownsInteraction) && !clientInstance.blocksContinuousAim,
                 gg.mineral.bot.api.navigation.NavigationCombatState(navigationProtection.active,

@@ -36,17 +36,18 @@ class NavigationContinuityTest {
         }
     }
 
-    @Test fun `five second damage protection tracks fresh damage but not healing`() {
+    @Test fun `six second damage protection tracks fresh damage but not healing`() {
         var now = 0L
         val protection = CombatNavigationProtection { now }
         protection.observeHealth(20f)
         assertFalse(protection.active)
         protection.observeHealth(19f)
-        now = 4999; assertTrue(protection.active)
+        now = 5999; assertTrue(protection.active)
         protection.observeHealth(20f)
-        now = 5000; assertFalse(protection.active)
-        protection.hurt(); now = 9999; assertTrue(protection.active)
-        now = 10000; assertFalse(protection.active)
+        now = 6000; assertFalse(protection.active)
+        protection.hurt(); now = 11999; assertTrue(protection.active)
+        now = 12000; assertFalse(protection.active)
+        protection.hurt(); protection.clear(); assertFalse(protection.active)
     }
 
     @Test fun `open pursuit keeps combat controls even outside melee range`() {
@@ -60,11 +61,30 @@ class NavigationContinuityTest {
         assertEquals(0,navigator.searchesStarted)
     }
 
-    @Test fun `recent damage still permits blocked escape without waiting five seconds`() {
+    @Test fun `only our recent attack feedback refreshes protection including delayed hits`() {
+        var now=0L
+        val target=java.util.UUID(0,1); val other=java.util.UUID(0,2)
+        val protection=CombatNavigationProtection { now }
+        protection.hitFeedback(target,0); assertFalse(protection.active)
+        protection.attacking(target)
+        now=100; protection.hitFeedback(other,0); assertFalse(protection.active)
+        protection.hitFeedback(target,0); assertTrue(protection.active)
+        now=6_100; assertFalse(protection.active)
+        protection.hitFeedback(target,0); assertFalse(protection.active)
+        protection.attacking(target)
+        now=6_500; protection.hitFeedback(target,250); assertTrue(protection.active)
+        now=12_499; assertTrue(protection.active)
+        now=12_500; assertFalse(protection.active)
+        protection.attacking(target); now=12_800
+        protection.hitFeedback(target,0); assertFalse(protection.active)
+    }
+    @Test fun `recent damage permits blocked escape after four stable ticks`() {
         val ctx = Context()
         for(z in -2..2) for(y in 1..3) ctx.world.solid(2,y,z)
         val navigator = CombatNavigator(ctx)
-        assertTrue(navigator.update(1,NavVec(8.5,1.0,0.5),3.35,false,false,
+        for(tick in 1..3) assertFalse(navigator.update(tick,NavVec(8.5,1.0,0.5),3.75,false,false,
+            NavigationCombatState(protected=true,preserveOpenMovement=true)))
+        assertTrue(navigator.update(4,NavVec(8.5,1.0,0.5),3.75,false,false,
             NavigationCombatState(protected=true,preserveOpenMovement=true)))
         assertTrue(ctx.keys.any { it in setOf(Key.Type.KEY_W,Key.Type.KEY_A,Key.Type.KEY_S,Key.Type.KEY_D) })
         assertEquals(0,navigator.firstMovementDelayTicks)

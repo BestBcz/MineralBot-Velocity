@@ -6,19 +6,22 @@ import kotlin.math.*
 
 enum class Traversal { WALK, STEP, JUMP, DROP, SWIM, TOWER }
 data class RouteStep(val position: NavVec, val traversal: Traversal, val actions: List<BlockAction> = emptyList(),
-                     val estimatedTicks: Double = 0.0)
+                     val estimatedTicks: Double = 0.0, val selectionCost: Double = estimatedTicks)
 enum class SearchStatus { SEARCHING, SUCCESS, PARTIAL, NO_PATH }
 data class RouteResult(val status: SearchStatus, val path: List<RouteStep>, val expanded: Int)
-data class NavigationGoal(val position: NavVec, val range: Double = 2.5)
+data class NavigationGoal(val position: NavVec, val range: Double = 2.5,
+                          val interactionBlocks: Set<BlockPos> = emptySet())
 
 class IncrementalPathfinder(private val world: NavigationWorld, start: NavigationState,
     private val goal: NavigationGoal, private val material: BuildingMaterial? = null,
     private val excluded: Set<BlockPos> = emptySet(), private val nanoTime: () -> Long = System::nanoTime,
-    private val allowEdits: Boolean = true, private val actionOverheadTicks: Double = 4.0) {
+    private val allowEdits: Boolean = true, private val actionOverheadTicks: Double = 4.0,
+    private val terrainCostFactor: Double = NavigationTuning.TERRAIN_COST_FACTOR) {
     private data class Key(val x: Int,val y: Int,val z: Int,val edits: Map<BlockPos,NavBlock>,val remaining: Int)
     private data class Node(val step: RouteStep,val edits: Map<BlockPos,NavBlock>,val remaining: Int,
         val cost: Double,val heuristic: Double,val parent: Node?)
     private val geometry=NavigationGeometry(world,start.width,start.height)
+    private val startState=start
     private val origin=start.position
     private val horizontalEstimate=if(start.inWater && geometry.water(goal.position,emptyMap())) 10.0 else 3.5
     private val open=PriorityQueue<Node>(compareBy<Node> { it.cost+it.heuristic }.thenBy { it.heuristic })
@@ -61,6 +64,8 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
 
     private fun atGoal(n: Node): Boolean {
         val p=n.step.position
+        if (goal.interactionBlocks.isNotEmpty()) return BlockInteraction.findAction(world,
+            startState.copy(position=p,onGround=true,inWater=false),goal.interactionBlocks,n.edits,excluded)!=null
         if(hypot(p.x-goal.position.x,p.z-goal.position.z)>goal.range || abs(p.y-goal.position.y)>1.0) return false
         // A nearby target behind a wall is not an attack position.
         val distance=hypot(p.x-goal.position.x,p.z-goal.position.z)
@@ -143,8 +148,9 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
         }
         return true
     }
-    private fun child(n: Node,p: NavVec,type: Traversal,actions: List<BlockAction>,edits: Map<BlockPos,NavBlock>,used: Int,cost: Double) =
-        Node(RouteStep(p,type,actions,cost),edits,n.remaining-used,n.cost+cost,h(p),n)
+    private fun child(n: Node,p: NavVec,type: Traversal,actions: List<BlockAction>,edits: Map<BlockPos,NavBlock>,used: Int,cost: Double,
+                      selectionCost: Double = cost) =
+        Node(RouteStep(p,type,actions,cost,selectionCost),edits,n.remaining-used,n.cost+selectionCost,h(p),n)
 
     private fun swimCost(from: NavVec,to: NavVec,edits: Map<BlockPos,NavBlock>): Double {
         val distance=hypot(to.x-from.x,to.z-from.z)
@@ -171,7 +177,7 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
             }
         }
         if(actions.isEmpty() || !geometry.clear(dest,edits) || !geometry.walk(n.step.position,dest,edits)) return null
-        return child(n,dest,Traversal.WALK,actions,edits.toMap(),0,cost)
+        return child(n,dest,Traversal.WALK,actions,edits.toMap(),0,cost,3.5+(cost-3.5)*terrainCostFactor)
     }
     private fun adjacentUnsafe(p: BlockPos,edits: Map<BlockPos,NavBlock>): Boolean {
         return listOf(p.offset(1,0,0),p.offset(-1,0,0),p.offset(0,0,1),p.offset(0,0,-1),p.offset(0,1,0)).any {
@@ -194,7 +200,8 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
         if(type==Traversal.TOWER && !geometry.clear(NavVec(dest.x,dest.y+0.25,dest.z),n.edits)) return null
         val style=when(type) { Traversal.TOWER -> PlacementStyle.TOWER; Traversal.JUMP,Traversal.STEP -> PlacementStyle.STEP; else -> PlacementStyle.BRIDGE }
         val action=BlockAction(BlockActionKind.PLACE,p,m.id,m.metadata,m.slot,style)
-        val execution=when(style) { PlacementStyle.TOWER -> 10.0; PlacementStyle.STEP -> 13.0; else -> 7.0 }
-        return child(n,dest,type,listOf(action),edits,1,actionOverheadTicks+execution)
+        val execution=when(style) { PlacementStyle.TOWER -> 10.0; PlacementStyle.STEP -> 13.0; else -> NavigationTuning.BRIDGE_EXECUTION_TICKS }
+        val ticks=actionOverheadTicks+execution
+        return child(n,dest,type,listOf(action),edits,1,ticks,ticks*terrainCostFactor)
     }
 }
