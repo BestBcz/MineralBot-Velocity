@@ -11,7 +11,8 @@ enum class SearchStatus { SEARCHING, SUCCESS, PARTIAL, NO_PATH }
 data class RouteResult(val status: SearchStatus, val path: List<RouteStep>, val expanded: Int,
                        val executableSegment: List<RouteStep> = path.take(NavigationTuning.EXECUTABLE_PREFIX_STEPS))
 data class NavigationGoal(val position: NavVec, val range: Double = 2.5,
-                          val interactionBlocks: Set<BlockPos> = emptySet())
+                          val interactionBlocks: Set<BlockPos> = emptySet(),
+                          val preferredBridgeHeight: Double? = null)
 
 class IncrementalPathfinder(private val world: NavigationWorld, start: NavigationState,
     private val goal: NavigationGoal, private val material: BuildingMaterial? = null,
@@ -26,15 +27,39 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
     private val geometry=NavigationGeometry(world,start.width,start.height)
     private val startState=start
     private val origin=start.position
+    private val bedDistance=hypot(origin.x-goal.position.x,origin.z-goal.position.z)
+    private val climbStage=profile==NavigationProfile.BEDFIGHT && goal.preferredBridgeHeight?.let { it>origin.y+0.6 }==true && bedDistance>6.0
+    // Solve a bounded advancing climb before resuming the low bed objective.
+    // A height-only heuristic toward a distant bed can otherwise prefer a long flat bridge.
+    private val guidance=if(climbStage) {
+        val scale=min(6.0,bedDistance-6.0)/bedDistance
+        NavVec(origin.x+(goal.position.x-origin.x)*scale,goal.preferredBridgeHeight!!,
+            origin.z+(goal.position.z-origin.z)*scale)
+    } else goal.position
     private val horizontalEstimate=if(start.inWater && geometry.water(goal.position,emptyMap())) 10.0 else 3.5
     private val open=PriorityQueue<Node>(compareBy<Node> { it.cost+it.heuristic }.thenBy { it.heuristic })
     private val costs=HashMap<Key,Double>()
     private var best=Node(RouteStep(origin,Traversal.WALK),emptyMap(),material?.count?:0,0.0,h(origin),null)
     private var expanded=0
     private var complete: RouteResult?=null
-    init { open.add(best); costs[key(best)]=0.0 }
+    private val existingOpen=PriorityQueue<Node>(compareBy<Node> { it.cost+it.heuristic })
+    private val existingCosts=HashMap<Key,Double>()
+    private var existingExpanded=0
+    private var existingChecked=profile!=NavigationProfile.BEDFIGHT || !allowEdits || material==null
+    init {
+        open.add(best); costs[key(best)]=0.0
+        if(!existingChecked) { existingOpen.add(best); existingCosts[key(best)]=0.0 }
+    }
     // A practical vertical estimate keeps a close elevated target from expanding every ground-level edit combination.
-    private fun h(p: NavVec)=max(0.0,hypot(p.x-goal.position.x,p.z-goal.position.z)-goal.range)*horizontalEstimate+max(0.0,abs(p.y-goal.position.y)-1.0)*12.0
+    private fun travelHeight(p: NavVec): Double = if(profile==NavigationProfile.BEDFIGHT &&
+        hypot(p.x-goal.position.x,p.z-goal.position.z)>6.0)
+        max(goal.position.y,goal.preferredBridgeHeight ?: goal.position.y) else goal.position.y
+    private fun h(p: NavVec): Double {
+        val distance=hypot(p.x-guidance.x,p.z-guidance.z)
+        val tolerance=if(climbStage) 0.05 else 1.0
+        return max(0.0,distance-if(climbStage) 0.3 else goal.range)*horizontalEstimate+
+            max(0.0,abs(p.y-if(climbStage) guidance.y else travelHeight(p))-tolerance)*12.0
+    }
     private fun key(n: Node)=Key(round(n.step.position.x*16).toInt(),round(n.step.position.y*16).toInt(),round(n.step.position.z*16).toInt(),n.edits,n.remaining)
     private fun path(n: Node): List<RouteStep> { val result=ArrayList<RouteStep>(); var at: Node?=n
         while(at?.parent!=null) { result.add(at.step); at=at.parent }; result.reverse(); return result }
@@ -42,12 +67,48 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
     fun compute(maxNodes: Int = 64, budgetNanos: Long = 1_000_000): RouteResult {
         complete?.let { return it }
         val started=nanoTime(); var slice=0
+        // Check nearby connected terrain before publishing a construction prefix.
+        // This search may step sideways to join a bridge; it shares the same slice budget.
+        while(!existingChecked && slice<maxNodes && (slice==0 || nanoTime()-started<budgetNanos)) {
+            val n=existingOpen.poll()
+            if(n==null || existingExpanded>=NavigationTuning.EXISTING_ROUTE_NODES) { existingChecked=true; break }
+            if(n.cost>(existingCosts[key(n)] ?: Double.POSITIVE_INFINITY)+1e-6) continue
+            existingExpanded++; slice++
+            val choices=neighbors(n,construction=false).filter { candidate ->
+                val p=candidate.step.position
+                p.block !in excluded && hypot(p.x-origin.x,p.z-origin.z)<=NavigationTuning.EXISTING_ROUTE_RADIUS &&
+                    (candidate.step.traversal!=Traversal.JUMP || hypot(p.x-n.step.position.x,p.z-n.step.position.z)<=1.5 &&
+                        JumpEdge(n.step.position.block,p.block) !in failedJumps)
+            }
+            val reached=choices.firstOrNull { atGoal(it) }
+            if(reached!=null) return RouteResult(SearchStatus.SUCCESS,path(reached),existingExpanded).also { complete=it }
+            val progress=choices.filter { candidate ->
+                val p=candidate.step.position
+                val horizontal=hypot(p.x-goal.position.x,p.z-goal.position.z)
+                bedDistance-horizontal>=0.75 || horizontal<=bedDistance+0.5 &&
+                    abs(origin.y-travelHeight(origin))-abs(p.y-travelHeight(p))>=0.5
+            }.minByOrNull { it.cost+it.heuristic }
+            if(progress!=null) return RouteResult(SearchStatus.PARTIAL,path(progress),existingExpanded).also { complete=it }
+            for(candidate in choices) {
+                val k=key(candidate)
+                if(candidate.cost<(existingCosts[k] ?: Double.POSITIVE_INFINITY)-1e-6) {
+                    existingCosts[k]=candidate.cost; existingOpen.add(candidate)
+                }
+            }
+            if(existingOpen.isEmpty() || existingExpanded>=NavigationTuning.EXISTING_ROUTE_NODES) existingChecked=true
+        }
+        if(!existingChecked) return RouteResult(SearchStatus.SEARCHING,emptyList(),existingExpanded)
         while(open.isNotEmpty() && expanded<8192 && slice<maxNodes && (slice==0 || nanoTime()-started<budgetNanos)) {
             val n=open.poll()
             if(n.cost>(costs[key(n)]?:Double.POSITIVE_INFINITY)+1e-6) continue
             expanded++; slice++
             if(h(n.step.position)<best.heuristic) best=n
             if(atGoal(n)) return RouteResult(SearchStatus.SUCCESS,path(n),expanded).also { complete=it }
+            if(climbStage && n.parent!=null && (n.step.position.y>=guidance.y-0.05 ||
+                hypot(n.step.position.x-goal.position.x,n.step.position.z-goal.position.z)<=6.0))
+                return RouteResult(SearchStatus.PARTIAL,path(n),expanded).also { complete=it }
+            if(profile==NavigationProfile.BEDFIGHT && n.step.traversal==Traversal.DROP && origin.y-n.step.position.y>16.0)
+                return RouteResult(SearchStatus.PARTIAL,path(n),expanded).also { complete=it }
             // A bounded batch is a continuation point, not completion of the objective.
             if(n.parent!=null && n.heuristic<h(origin) &&
                 (n.edits.size>=NavigationTuning.MAX_TERRAIN_EDITS ||
@@ -56,7 +117,8 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
             neighbors(n).forEach { candidate ->
                 val p=candidate.step.position
                 if(p.block in excluded || hypot(p.x-origin.x,p.z-origin.z)>NavigationTuning.SEARCH_RADIUS ||
-                    abs(p.y-origin.y)>16 || candidate.edits.size>NavigationTuning.MAX_TERRAIN_EDITS) return@forEach
+                    abs(p.y-origin.y)>16 && !(profile==NavigationProfile.BEDFIGHT && candidate.step.traversal==Traversal.DROP && p.y<origin.y) ||
+                    candidate.edits.size>NavigationTuning.MAX_TERRAIN_EDITS) return@forEach
                 if(candidate.step.traversal==Traversal.JUMP && candidate.step.actions.isEmpty() &&
                     JumpEdge(n.step.position.block,p.block) in failedJumps) return@forEach
                 val key=key(candidate)
@@ -96,7 +158,7 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
         return true
     }
 
-    private fun neighbors(n: Node): List<Node> {
+    private fun neighbors(n: Node,construction: Boolean=allowEdits): List<Node> {
         val result=ArrayList<Node>(); val from=n.step.position
         val inWater=geometry.water(from,n.edits)
         // Grid nodes must also reach non-centered players and short-lived remembered positions.
@@ -108,6 +170,7 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
                 result.add(child(n,goal.position,Traversal.WALK,emptyList(),n.edits,0,goalDistance*3.5))
         }
         var forwardStair=false
+        var forwardLoaded=false
         for(dx in -1..1) for(dz in -1..1) {
             if(dx==0 && dz==0) continue
             val x=floor(from.x)+0.5+dx; val z=floor(from.z)+0.5+dz
@@ -125,20 +188,35 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
                 }
             }
             val tops=geometry.surfaces(x,z,from.y,n.edits)
+            var naturalAdvance=false
             for(top in tops) {
                 val dest=NavVec(x,top,z)
                 if(geometry.water(dest,n.edits)) continue
                 if(geometry.clear(dest,n.edits)) {
                     val walk=geometry.walk(from,dest,n.edits)
                     if(walk || (!inWater && dx*dz==0 && geometry.jump(from,dest,n.edits)) || (inWater && dx*dz==0 && top-from.y<=1.0 && geometry.swim(from,NavVec(from.x,top,from.z),n.edits) && geometry.clearSegment(NavVec(from.x,top,from.z),dest,n.edits))) {
-                        val type=if(inWater) Traversal.SWIM else if(walk) when { top<from.y-0.6 -> Traversal.DROP; top>from.y+0.01 -> Traversal.STEP; else -> Traversal.WALK } else Traversal.JUMP
+                        val type=if(inWater) Traversal.SWIM else if(walk) when { top<from.y-0.01 -> Traversal.DROP; top>from.y+0.01 -> Traversal.STEP; else -> Traversal.WALK } else Traversal.JUMP
+                        naturalAdvance=true
+                        if(top>from.y+0.6 && hypot(x-goal.position.x,z-goal.position.z)<goalDistance-0.1) forwardStair=true
                         result.add(child(n,dest,type,emptyList(),n.edits,0,if(inWater) swimCost(from,dest,n.edits) else 3.5*hypot(x-from.x,z-from.z)+(if(type==Traversal.JUMP) 6.0 else 0.0))); break
                     }
                 }
-                if(dx*dz==0) breakObstacles(n,dest)?.let { result.add(it) }
+                if(construction && dx*dz==0) breakObstacles(n,dest)?.let { result.add(it) }
+            }
+            if(profile==NavigationProfile.BEDFIGHT && goal.position.y<from.y-0.6 && !inWater && dx*dz==0 && !naturalAdvance &&
+                hypot(startState.velocity.x,startState.velocity.z)<=0.35) {
+                val landing=geometry.landingBelow(x,z,from.y,n.edits)
+                if(landing!=null && geometry.drop(from,landing,n.edits)) {
+                    val ticks=3.5*hypot(x-from.x,z-from.z)+sqrt((from.y-landing.y)*25.0)
+                    result.add(child(n,landing,Traversal.DROP,emptyList(),n.edits,0,ticks))
+                    naturalAdvance=true
+                }
             }
             if(dx*dz==0 && !inWater) {
-                val foundation=placeSupport(n,NavVec(x,ceil(from.y),z),if(ceil(from.y)>from.y)Traversal.STEP else Traversal.WALK)
+                val toward=hypot(x-goal.position.x,z-goal.position.z)<goalDistance-0.1
+                if(toward && (-1..2).all { geometry.block(BlockPos.at(x,from.y+it,z),n.edits)!=null }) forwardLoaded=true
+                val foundation=if(construction && !naturalAdvance) placeSupport(n,NavVec(x,ceil(from.y),z),
+                    if(ceil(from.y)>from.y)Traversal.STEP else Traversal.WALK) else null
                 for(gap in 2..3) {
                     val gx=floor(from.x)+0.5+dx*gap; val gz=floor(from.z)+0.5+dz*gap
                     // Only jump gaps, not arbitrary shortcuts through obstacles.
@@ -150,8 +228,7 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
                     }
                 }
                 foundation?.let { result.add(it) }
-                if(goal.position.y>from.y+0.6) {
-                    val toward=hypot(x-goal.position.x,z-goal.position.z)<goalDistance-0.1
+                if(construction && !naturalAdvance && travelHeight(from)>from.y+0.6) {
                     if(profile!=NavigationProfile.BEDFIGHT || toward) {
                         // With existing ground, place a raised step against that support.
                         // Over void, land on a confirmed foundation before placing underfoot.
@@ -166,7 +243,8 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
         if(inWater) {
             val up=NavVec(from.x,from.y+1,from.z)
             if(geometry.swim(from,up,n.edits)) result.add(child(n,up,Traversal.SWIM,emptyList(),n.edits,0,8.0))
-        } else if(goal.position.y>from.y+0.6 &&
+        } else if(construction && travelHeight(from)>from.y+0.6 &&
+            (goal.preferredBridgeHeight==null || goalDistance<=1.5 || forwardLoaded) &&
             (profile!=NavigationProfile.BEDFIGHT || goalDistance<=1.5 || !forwardStair))
             placeSupport(n,NavVec(from.x,from.y+1,from.z),Traversal.TOWER)?.let { result.add(it) }
         return result
@@ -218,7 +296,8 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
     }
     private fun placeSupport(n: Node,dest: NavVec,type: Traversal): Node? {
         if(!allowEdits) return null
-        if(dest.y>goal.position.y+1.0) return null
+        // Returning to a low bed must still allow a flat bridge from our current height.
+        if(dest.y>maxOf(origin.y,goal.position.y,goal.preferredBridgeHeight ?: goal.position.y)+1.0) return null
         val m=material?:return null
         if(n.remaining<=0 || abs(dest.y-round(dest.y))>0.01) return null
         val p=BlockPos.at(dest.x,dest.y-1,dest.z); val old=geometry.block(p,n.edits)?:return null

@@ -42,6 +42,44 @@ internal class NavigationGeometry(val world: NavigationWorld, val width: Double,
         block(BlockPos.at(p.x,p.y+0.4,p.z), edits)?.water == true ||
         block(BlockPos.at(p.x,p.y-0.2,p.z), edits)?.water == true
 
+    fun supportedFootprint(p: NavVec,edits: Map<BlockPos,NavBlock> = emptyMap()): Boolean {
+        val radius=width/2+0.015
+        for(dx in listOf(-radius,0.0,radius)) for(dz in listOf(-radius,0.0,radius)) {
+            val x=p.x+dx; val z=p.z+dz
+            val b=block(BlockPos.at(x,p.y-0.02,z),edits) ?: return false
+            if(b.hazardous || b.boxes.none { abs(it.maxY-p.y)<0.06 && x>=it.minX && x<=it.maxX && z>=it.minZ && z<=it.maxZ }) return false
+        }
+        return true
+    }
+
+    /** A solid, loaded landing column; air or unknown terrain never counts as a landing. */
+    fun landingBelow(x: Double,z: Double,feetY: Double,edits: Map<BlockPos,NavBlock>): NavVec? {
+        for(y in min(255,floor(feetY-0.01).toInt()) downTo 0) {
+            val b=block(BlockPos.at(x,y.toDouble(),z),edits) ?: return null
+            if(b.hazardous || b.water) return null
+            if(b.boxes.isEmpty()) continue
+            val top=b.boxes.maxOf { it.maxY }
+            if(top>feetY+0.05) return null
+            val landing=NavVec(x,top,z)
+            return landing.takeIf { clear(it,edits) && supportedFootprint(it,edits) }
+        }
+        return null
+    }
+
+    fun drop(from: NavVec,to: NavVec,edits: Map<BlockPos,NavBlock>): Boolean {
+        if(from.y-to.y<=3.0 || hypot(to.x-from.x,to.z-from.z)>1.5 || water(to,edits) || !supportedFootprint(to,edits)) return false
+        val above=to.copy(y=from.y)
+        if(!clearSegment(from,above,edits)) return false
+        val column=body(to).copy(maxY=from.y+height)
+        for(x in floor(column.minX).toInt()..floor(column.maxX).toInt())
+            for(z in floor(column.minZ).toInt()..floor(column.maxZ).toInt())
+                for(y in max(0,floor(column.minY).toInt()-1)..min(255,floor(column.maxY).toInt())) {
+                    val b=block(BlockPos(x,y,z),edits) ?: return false
+                    if(b.hazardous || b.water || b.boxes.any { it.intersects(column) }) return false
+                }
+        return true
+    }
+
     fun clearSegment(from: NavVec,to: NavVec,edits: Map<BlockPos,NavBlock>): Boolean {
         val steps=max(1,ceil(max(hypot(to.x-from.x,to.z-from.z),abs(to.y-from.y))/0.12).toInt())
         return (1..steps).all { i ->
@@ -74,6 +112,13 @@ internal class NavigationGeometry(val world: NavigationWorld, val width: Double,
     }
 
     fun walk(from: NavVec, to: NavVec, edits: Map<BlockPos, NavBlock>): Boolean {
+        if(abs(to.x-from.x)>0.05 && abs(to.z-from.z)>0.05 && abs(to.y-from.y)<0.06) {
+            // Keep both corners supported when joining a narrow bridge/island.
+            // Sampling only the diagonal can miss a very short unsupported corner.
+            for(corner in listOf(NavVec(from.x,to.y,to.z),NavVec(to.x,to.y,from.z))) {
+                if(!clear(corner,edits) || surfaces(corner.x,corner.z,corner.y,edits,0.05).none { abs(it-corner.y)<0.06 }) return false
+            }
+        }
         val length = hypot(to.x-from.x,to.z-from.z)
         val steps = max(1,ceil(length/0.12).toInt()); var y = from.y
         for (i in 1..steps) {

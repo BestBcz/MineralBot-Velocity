@@ -67,6 +67,9 @@ interface NavigationContext {
     val searchBudget: NavigationSearchBudget get() = NavigationSearchBudget.UNLIMITED
     val actionOverheadTicks: Double get() = 4.0
     val actionDiagnostic: String get() = actionStatus().name
+    val ownsAim: Boolean get() = false
+    /** Keep a confirmed bridge's backward view; null ends the bridge rhythm. */
+    fun continueBridge(destination: NavVec?): Boolean = false
     fun maintainBuoyancy(inWater: Boolean) {}
     fun state(): NavigationState
     fun material(): BuildingMaterial?

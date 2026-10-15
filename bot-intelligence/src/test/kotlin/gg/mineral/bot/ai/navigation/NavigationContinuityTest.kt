@@ -101,6 +101,27 @@ class NavigationContinuityTest {
         assertTrue(Key.Type.KEY_W in ctx.keys)
     }
 
+    @Test fun `close melee knockback and opponent jumps cancel stale building and never crouch or aim at blocks`() {
+        val ctx=Context(); ctx.world.building=true; ctx.material=BuildingMaterial(35,0,2,32)
+        for(x in 1..4)for(z in -40..40)ctx.world.gaps.add(x to z)
+        val nav=CombatNavigator(ctx); var tick=0
+        while(!nav.ownsInteraction && tick<12)
+            nav.update(tick++,NavVec(8.5,1.0,0.5),0.3,false,true,profile=NavigationProfile.BEDFIGHT)
+        assertTrue(nav.ownsInteraction)
+        val searches=nav.searchesStarted
+        ctx.world.gaps.clear(); ctx.world.revision++
+        repeat(20) { phase ->
+            val height=if(phase%3==0)1.0 else 1.8
+            ctx.player=ctx.player.copy(position=NavVec(0.5,height,0.5),onGround=height==1.0,
+                velocity=NavVec(0.3,0.2,0.0))
+            assertFalse(nav.update(tick++,NavVec(3.5,if(phase%2==0)2.2 else 1.0,0.5),3.75,true,true,
+                NavigationCombatState(protected=true,preserveOpenMovement=true),profile=NavigationProfile.BEDFIGHT))
+            assertFalse(nav.ownsInteraction); assertFalse(nav.ownsAim)
+            assertNull(nav.steeringYaw); assertFalse(Key.Type.KEY_LSHIFT in ctx.keys)
+        }
+        assertEquals(1,ctx.requests.size); assertEquals(searches,nav.searchesStarted)
+    }
+
     @Test fun `budget waits move safely and target crossing a block does not restart the search`() {
         val ctx = Context()
         ctx.searchBudget = object : NavigationSearchBudget { override fun acquire(owner: Any)=0L }

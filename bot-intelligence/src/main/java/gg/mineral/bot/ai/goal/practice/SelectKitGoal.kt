@@ -8,7 +8,8 @@ import gg.mineral.bot.api.goal.Sporadic
 import gg.mineral.bot.api.goal.Timebound
 import gg.mineral.bot.api.instance.ClientInstance
 import gg.mineral.bot.api.inv.item.Item
-import gg.mineral.bot.api.screen.type.ContainerScreen
+import kotlin.math.ceil
+import kotlin.math.max
 
 /**
  * Goal for clicking the enchanted book (kit selector) in Practice arenas.
@@ -19,11 +20,15 @@ class SelectKitGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstan
     override var startTime: Long = 0
     override val maxDuration: Long = 100
     
-    private var hasSelectedKit = false
-    private var clickedBook = false
+    private var lastClickTick: Int? = null
+    private var retryAfterTick = 0
+
+    override fun blocksContinuousAim() = true
+    override fun blocksContinuousAttack() = true
+    override fun blocksContinuousMovement() = true
     
     override fun shouldExecute(): Boolean {
-        if (hasSelectedKit) return false
+        if (clientInstance.currentTick < retryAfterTick) return false
         
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
@@ -33,7 +38,8 @@ class SelectKitGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstan
     }
     
     override fun onStart() {
-        clickedBook = false
+        lastClickTick = null
+        clientInstance.mouse.clearPendingClicks()
     }
     
     private fun getEnchantedBookSlot(): Int {
@@ -70,30 +76,27 @@ class SelectKitGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstan
         }
         
         // Verify we're holding the enchanted book
-        tick.finishIf("Not Holding Enchanted Book", inventory.heldItemStack?.item?.id != Item.ENCHANTED_BOOK)
+        tick.prerequisite("Holding Enchanted Book", inventory.heldItemStack?.item?.id == Item.ENCHANTED_BOOK) {}
         
         // Right click to select kit
         tick.execute {
-            if (!clickedBook) {
+            val interval=max(10,ceil(clientInstance.latency.coerceAtLeast(0)/50.0).toInt()*2+4)
+            if (lastClickTick?.let { clientInstance.currentTick-it>=interval } != false) {
                 pressButton(50, MouseButton.Type.RIGHT_CLICK)
-                clickedBook = true
+                lastClickTick = clientInstance.currentTick
             }
         }
         
         // Check if kit was selected (no more enchanted book in inventory)
         tick.finishIf("Kit Selected", !fakePlayer.inventory.contains(Item.ENCHANTED_BOOK))
         
-        tick.execute {
-            // If book is gone, we've selected our kit
-            if (!fakePlayer.inventory.contains(Item.ENCHANTED_BOOK)) {
-                hasSelectedKit = true
-            }
-        }
     }
     
     override fun onEnd() {
-        hasSelectedKit = true
-        logger.debug("Kit selection completed")
+        clientInstance.mouse.clearPendingClicks()
+        val selected=!clientInstance.fakePlayer.inventory.contains(Item.ENCHANTED_BOOK)
+        retryAfterTick=clientInstance.currentTick+if(selected) 0 else 10
+        logger.debug("Kit selection ended: selected={}",selected)
     }
     
     override fun onEvent(event: Event): Boolean {

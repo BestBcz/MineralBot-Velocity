@@ -7,11 +7,23 @@ import kotlin.math.*
 internal class BridgePlacement(private val support: BlockPos, private val target: BlockPos,
                                private val supported: (NavVec,Double) -> Boolean, initialCautious: Boolean = false) {
     data class Motion(val destination: NavVec, val sneak: Boolean, val ready: Boolean, val failed: Boolean = false)
+    data class Aim(val yaw: Float, val pitch: Float, val sideVisible: Boolean)
     private var cautious=initialCautious
     private var previous: NavVec?=null
     private val dx=(target.x-support.x).toDouble()
     private val dz=(target.z-support.z).toDouble()
     private val edge=NavVec(support.x+0.5+dx*0.65,support.y+1.0,support.z+0.5+dz*0.65)
+
+    fun aim(state: NavigationState): Aim {
+        val face=NavVec(support.x+0.5+dx*0.5,support.y+0.5,support.z+0.5+dz*0.5)
+        val along=(state.position.x-face.x)*dx+(state.position.z-face.z)*dz
+        val beyond=along>0.01
+        // The next side is still ahead until the feet pass its plane. Never turn
+        // around to aim at that hidden face during travel across the new block.
+        val pitch=if(beyond) Math.toDegrees(atan2(state.position.y+state.eyeHeight-face.y,
+            along)).toFloat() else 80f
+        return Aim(Math.toDegrees(atan2(dx,-dz)).toFloat(),pitch,beyond)
+    }
 
     fun update(state: NavigationState,clicked: Boolean): Motion {
         val here=state.position

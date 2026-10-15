@@ -591,7 +591,7 @@ open class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clien
 
     private fun shouldYieldInventoryControl(): Boolean = clientInstance.blocksContinuousInventory || navigator?.ownsInteraction == true
 
-    private fun shouldYieldAimControl(): Boolean = clientInstance.blocksContinuousAim || navigator?.ownsInteraction == true
+    private fun shouldYieldAimControl(): Boolean = clientInstance.blocksContinuousAim || navigator?.ownsAim == true
 
     private fun shouldYieldAttackControl(): Boolean {
         if (clientInstance.blocksContinuousAttack || navigator?.ownsInteraction == true) return true

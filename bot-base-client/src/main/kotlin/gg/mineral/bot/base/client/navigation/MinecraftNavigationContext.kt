@@ -58,11 +58,9 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
     private var swapToken: Long?=null
     private var selectedSlot=-1
     private var clicked=false
-    private var ownsSneak=false
     private var ownsJump=false
     private var ownsMouse=false
-    private var ownsAim=false
-    private val movementTypes=setOf(Key.Type.KEY_W,Key.Type.KEY_A,Key.Type.KEY_S,Key.Type.KEY_D,Key.Type.KEY_SPACE,Key.Type.KEY_LCONTROL)
+    override var ownsAim=false; private set
     private val orphanedSwaps=mutableSetOf<Long>()
     override val revision: Long get()=blockRevision
 
@@ -219,9 +217,28 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
     }
     override fun actionStatus()=status
     override fun move(keys: Set<Key.Type>) {
-        (movementTypes-keys).forEach { instance.keyboard.unpressKey(it) }
-        keys.forEach { instance.keyboard.pressKey(it) }
+        NavigationMovement.apply(instance.keyboard,keys)
         if(instance.thePlayer?.isInWater==true) instance.thePlayer?.setSprinting(false)
+    }
+    override fun continueBridge(destination: NavVec?): Boolean {
+        if(destination==null) {
+            bridgeChain=null; bridgeDirection=null
+            if(action==null) ownsAim=false
+            return false
+        }
+        val completed=bridgeChain
+        val direction=bridgeDirection
+        if(action!=null || completed==null || direction==null) return false
+        val state=state()
+        val dx=destination.x-(completed.pos.x+0.5); val dz=destination.z-(completed.pos.z+0.5)
+        if(!state.onGround || state.inWater || abs(destination.y-completed.pos.y-1.0)>0.3 ||
+            hypot(dx,dz)>1.25 || abs(dx*direction.second-dz*direction.first)>0.4 ||
+            dx*direction.first+dz*direction.second< -0.75) {
+            bridgeChain=null; bridgeDirection=null; ownsAim=false; return false
+        }
+        val previous=completed.pos.offset(-direction.first,0,-direction.second)
+        aimBridge(BridgePlacement(previous,completed.pos,::confirmedFootprint).aim(state))
+        return true
     }
     private fun prepareSlot(a: BlockAction): Boolean {
         val p=instance.thePlayer?:return false
@@ -275,7 +292,7 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         }
         return center
     }
-    private fun steerTo(x: Double,z: Double) {
+    private fun steerTo(x: Double,z: Double,sneak: Boolean=false) {
         val p=instance.thePlayer?:return
         val angle=atan2(-(x-p.posX),z-p.posZ)-Math.toRadians(p.rotationYaw.toDouble())
         val keys=mutableSetOf<Key.Type>()
@@ -283,7 +300,28 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         if(cos(angle)<-0.38)keys.add(Key.Type.KEY_S)
         if(sin(angle)<-0.38)keys.add(Key.Type.KEY_A)
         if(sin(angle)>0.38)keys.add(Key.Type.KEY_D)
+        if(sneak) keys.add(Key.Type.KEY_LSHIFT)
         move(keys)
+    }
+    private fun aimBridge(aim: BridgePlacement.Aim) {
+        val p=instance.thePlayer?:return
+        instance.mouse.changeYaw(wrap(aim.yaw-p.rotationYaw))
+        instance.mouse.changePitch(aim.pitch-p.rotationPitch)
+        ownsAim=true
+    }
+    private fun prepareSupport(a: BlockAction): Boolean {
+        if(supportPos!=null) return true
+        val p=instance.thePlayer?:return false
+        val pos=a.pos
+        val candidates=listOf(pos.offset(0,-1,0) to 1,pos.offset(-1,0,0) to 5,
+            pos.offset(1,0,0) to 4,pos.offset(0,0,-1) to 3,pos.offset(0,0,1) to 2)
+        val candidate=candidates.filter { block(it.first)?.boxes?.isNotEmpty()==true &&
+            (a.placement!=PlacementStyle.BRIDGE || it.first.y==pos.y) }
+            .minByOrNull { val center=faceCenter(it.first,it.second)
+                (center.xCoord-p.posX).pow(2)+(center.yCoord-p.posY).pow(2)+(center.zCoord-p.posZ).pow(2) }
+            ?:run { fail("no support face"); return false }
+        supportPos=candidate.first; supportFace=candidate.second
+        return true
     }
     override fun tickAction() {
         pump()
@@ -315,6 +353,11 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         val fastBridge=a.kind==BlockActionKind.PLACE && a.placement==PlacementStyle.BRIDGE
         if(reply!=1 && !fastBridge) return
         if(phase==Phase.AUTHORIZE) phase(Phase.SLOT)
+        if(fastBridge) {
+            if(!prepareSupport(a)) return
+            if(bridge==null) bridge=BridgePlacement(supportPos!!,a.pos,::confirmedFootprint,bridgeCautious)
+            aimBridge(bridge!!.aim(state()))
+        }
         // Advance flight even if a ray or inventory preparation is temporarily unavailable.
         val towerMotion=if(tower!=null && phase==Phase.EXECUTE && !clicked) tower!!.update(state(),false,false) else null
         if(towerMotion==TowerPlacement.Motion.FAILED) { fail("missed tower placement window"); return }
@@ -323,51 +366,44 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         }
         // A click is issued once. Confirmation waits must never re-enter jump or edge positioning.
         if(clicked) {
-            if(fastBridge) { instance.keyboard.pressKey(Key.Type.KEY_LSHIFT); ownsSneak=true; move(emptySet()) }
+            if(fastBridge) move(setOf(Key.Type.KEY_LSHIFT))
             phase(Phase.CONFIRM); return
         }
-        if(!prepareSlot(a)) return
+        if(!prepareSlot(a)) {
+            // Slot/authorization preparation must not leave previous movement held.
+            if(fastBridge && status!=ActionStatus.FAILED) move(setOf(Key.Type.KEY_LSHIFT))
+            return
+        }
         if(phase==Phase.SLOT) phase(Phase.POSITION)
 
         val pos=a.pos
         var support=pos
         var face=-1
         if(a.kind==BlockActionKind.PLACE) {
-            if(supportPos==null) {
-                val candidates=listOf(pos.offset(0,-1,0) to 1,pos.offset(-1,0,0) to 5,
-                    pos.offset(1,0,0) to 4,pos.offset(0,0,-1) to 3,pos.offset(0,0,1) to 2)
-                val candidate=candidates.filter { block(it.first)?.boxes?.isNotEmpty()==true }
-                    .minByOrNull { val center=faceCenter(it.first,it.second)
-                        (center.xCoord-p.posX).pow(2)+(center.yCoord-p.posY).pow(2)+(center.zCoord-p.posZ).pow(2) }
-                    ?:run { fail("no support face"); return }
-                supportPos=candidate.first; supportFace=candidate.second
-            }
+            if(!prepareSupport(a)) return
             support=supportPos!!; face=supportFace
             if(block(support)?.boxes?.isNotEmpty()!=true) { fail("support disappeared"); return }
             if(tower!=null && phase==Phase.POSITION) {
                 if(!p.onGround) return
                 if(hypot(pos.x+0.5-p.posX,pos.z+0.5-p.posZ)>0.07) {
-                    instance.keyboard.pressKey(Key.Type.KEY_LSHIFT); ownsSneak=true
-                    steerTo(pos.x+0.5,pos.z+0.5); return
+                    steerTo(pos.x+0.5,pos.z+0.5,sneak=true); return
                 }
-                if(ownsSneak) instance.keyboard.unpressKey(Key.Type.KEY_LSHIFT)
-                ownsSneak=false; move(emptySet()); phase(Phase.AIM)
+                move(emptySet()); phase(Phase.AIM)
             } else if(fastBridge && support.y==pos.y) {
-                if(bridge==null) bridge=BridgePlacement(support,pos,::confirmedFootprint,bridgeCautious)
                 val motion=bridge!!.update(state(),false)
                 if(motion.failed) { fail("bridge footing changed"); return }
-                if(motion.sneak) { instance.keyboard.pressKey(Key.Type.KEY_LSHIFT); ownsSneak=true }
-                else { if(ownsSneak) instance.keyboard.unpressKey(Key.Type.KEY_LSHIFT); ownsSneak=false }
-                if(!motion.ready) steerTo(motion.destination.x,motion.destination.z) else move(emptySet())
+                val facing=abs(wrap(bridge!!.aim(state()).yaw-p.rotationYaw))<20f
+                if(!facing) move(setOf(Key.Type.KEY_LSHIFT))
+                else if(!motion.ready) steerTo(motion.destination.x,motion.destination.z,motion.sneak)
+                else move(setOf(Key.Type.KEY_LSHIFT))
                 phase(Phase.AIM)
             } else if(tower==null) {
-                instance.keyboard.pressKey(Key.Type.KEY_LSHIFT); ownsSneak=true
                 if(phase==Phase.POSITION && pos.y+1<=p.boundingBox.minY+0.05 && support.y==pos.y) {
                     val x=support.x+0.5+(pos.x-support.x)*0.65
                     val z=support.z+0.5+(pos.z-support.z)*0.65
-                    if(hypot(x-p.posX,z-p.posZ)>0.09) { steerTo(x,z); return }
+                    if(hypot(x-p.posX,z-p.posZ)>0.09) { steerTo(x,z,sneak=true); return }
                 }
-                move(emptySet()); phase(Phase.AIM)
+                move(setOf(Key.Type.KEY_LSHIFT)); phase(Phase.AIM)
             }
         } else {
             val live=w.getBlock(pos.x,pos.y,pos.z)
@@ -382,8 +418,9 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
         // posY already includes the legacy client's eye offset.
         val dx=center.xCoord-p.posX; val dy=center.yCoord-p.posY; val dz=center.zCoord-p.posZ
         if(sqrt(dx*dx+dy*dy+dz*dz)>4.5) { fail("support outside reach"); return }
-        val yaw=Math.toDegrees(atan2(-dx,dz)).toFloat()
-        val pitch=-Math.toDegrees(atan2(dy,hypot(dx,dz))).toFloat()
+        val bridgeAim=bridge?.aim(state())
+        val yaw=bridgeAim?.yaw ?: Math.toDegrees(atan2(-dx,dz)).toFloat()
+        val pitch=bridgeAim?.pitch ?: -Math.toDegrees(atan2(dy,hypot(dx,dz))).toFloat()
         instance.mouse.changeYaw(wrap(yaw-p.rotationYaw)); instance.mouse.changePitch(pitch-p.rotationPitch)
         ownsAim=true
         // Check the actual applied rotation, not a stale render hit or a queued mouse delta.
@@ -398,7 +435,7 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
             if(a.kind==BlockActionKind.BREAK && ownsMouse) instance.mouse.unpressButton(MouseButton.Type.LEFT_CLICK)
             return
         }
-        if(fastBridge && (reply!=1 || bridge!=null && bridge!!.update(state(),false).ready!=true)) return
+        if(fastBridge && (reply!=1 || bridgeAim?.sideVisible!=true || bridge!!.update(state(),false).ready!=true)) return
         if(tower!=null) {
             phase(Phase.EXECUTE)
             when(towerMotion?:tower!!.update(state(),false,false)) {
@@ -429,9 +466,8 @@ class MinecraftNavigationContext(private val instance: ClientInstance) : Navigat
     private fun release() {
         if(ownsMouse || ownsAim) instance.mouse.clearPendingClicks()
         if(ownsMouse) { instance.mouse.unpressButton(MouseButton.Type.LEFT_CLICK,MouseButton.Type.RIGHT_CLICK); instance.playerController?.resetBlockRemoving() }
-        if(ownsSneak) instance.keyboard.unpressKey(Key.Type.KEY_LSHIFT)
         if(ownsJump) instance.keyboard.unpressKey(Key.Type.KEY_SPACE)
-        ownsMouse=false; ownsAim=false; ownsSneak=false; ownsJump=false
+        ownsMouse=false; ownsAim=false; ownsJump=false
     }
     private fun fail(reason: String="inventory preparation failed") { move(emptySet()); release(); failureReason=reason; status=ActionStatus.FAILED }
     private fun confirmedFootprint(point: NavVec,width: Double): Boolean {

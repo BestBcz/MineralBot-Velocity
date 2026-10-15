@@ -14,4 +14,7 @@ internal object NavigationTuning {
     const val SEARCH_RADIUS = 32.0
     const val JUMP_ATTEMPT_TICKS = 24
     const val FAILED_JUMP_TICKS = 100
+    const val EXISTING_ROUTE_NODES = 24
+    const val EXISTING_ROUTE_RADIUS = 4.0
+    const val COMBAT_TERRAIN_RANGE = 6.0
 }

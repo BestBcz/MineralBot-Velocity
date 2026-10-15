@@ -29,13 +29,19 @@ class ConstructionNavigationTest {
     }
     private class Context(val terrain: World=World()) : NavigationContext {
         override val world get()=terrain
-        override var searchBudget=NavigationSearchBudget.UNLIMITED
+        override var searchBudget=object : NavigationSearchBudget { override fun acquire(owner: Any)=Long.MAX_VALUE }
         var player=NavigationState(NavVec(0.5,1.0,0.5),-90f,true,false,300)
         var blocks: BuildingMaterial?=BuildingMaterial(35,0,2,64)
         var keys=emptySet<Key.Type>()
         var status=ActionStatus.IDLE
         val requests=mutableListOf<BlockAction>()
         var cancellations=0
+        var bridgeTravel=false
+        override val ownsAim get()=bridgeTravel
+        override fun continueBridge(destination: NavVec?): Boolean {
+            if(destination==null) bridgeTravel=false
+            return bridgeTravel
+        }
         override fun state()=player
         override fun material()=blocks
         override fun move(keys: Set<Key.Type>) { this.keys=keys }
@@ -45,7 +51,7 @@ class ConstructionNavigationTest {
         }
         override fun actionStatus()=status
         override fun tickAction() {}
-        override fun cancelAction() { cancellations++; status=ActionStatus.IDLE; keys=emptySet() }
+        override fun cancelAction() { cancellations++; status=ActionStatus.IDLE; keys=emptySet(); bridgeTravel=false }
         override fun completeAction() { status=ActionStatus.IDLE; keys=emptySet() }
         override fun reset()=cancelAction()
         fun confirmAndLand() {
@@ -61,8 +67,14 @@ class ConstructionNavigationTest {
             player=player.copy(yaw=yaw)
             if(keys.none { it in setOf(Key.Type.KEY_W,Key.Type.KEY_A,Key.Type.KEY_S,Key.Type.KEY_D) }) return
             val radians=Math.toRadians(yaw.toDouble())
-            val to=NavVec(player.position.x-sin(radians)*0.25,player.position.y,player.position.z+cos(radians)*0.25)
-            assertTrue(NavigationGeometry(world,0.6,1.8).walk(player.position,to,emptyMap()),"unconfirmed support: $to")
+            var to=NavVec(player.position.x-sin(radians)*0.25,player.position.y,player.position.z+cos(radians)*0.25)
+            val geometry=NavigationGeometry(world,0.6,1.8)
+            if(navigator.diagnostic.startsWith("drop")) {
+                geometry.surfaces(to.x,to.z,to.y,emptyMap(),0.05).firstOrNull { geometry.clear(to.copy(y=it),emptyMap()) }
+                    ?.let { to=to.copy(y=it) }
+            }
+            assertTrue(geometry.walk(player.position,to,emptyMap()) || navigator.diagnostic.startsWith("drop") &&
+                geometry.drop(player.position,to,emptyMap()),"unconfirmed support: $to")
             player=player.copy(position=to)
         }
     }
@@ -70,13 +82,125 @@ class ConstructionNavigationTest {
                      combat: NavigationCombatState=NavigationCombatState(),sight: Boolean=false)=
         nav.update(tick,target,0.3,sight,true,combat,profile=profile)
 
-    @Test fun `one node exposes validated construction toward distant players and beds`() {
+    private fun firstSegment(search: IncrementalPathfinder): RouteResult {
+        var result=search.compute(maxNodes=1)
+        repeat(NavigationTuning.EXISTING_ROUTE_NODES+1) {
+            if(result.status==SearchStatus.SEARCHING && result.executableSegment.isEmpty()) result=search.compute(maxNodes=1)
+        }
+        return result
+    }
+
+    @Test fun `bed route height hint starts stairs toward a distant low bed instead of retargeting to the player`() {
+        for(distance in listOf(16,32,48)) for(ground in listOf(false,true)) {
+            val ctx=Context(World(distance).apply { groundEverywhere=ground })
+            val bed=BlockPos(distance,1,0)
+            val result=firstSegment(IncrementalPathfinder(ctx.world,ctx.player,
+                NavigationGoal(NavVec(distance+0.5,1.5,0.5),4.5,setOf(bed),6.0),ctx.blocks,
+                nanoTime={0},profile=NavigationProfile.BEDFIGHT))
+            val prefix=result.executableSegment
+            assertTrue(prefix.last().position.x>ctx.player.position.x)
+            if(ground) assertTrue(prefix.all { it.actions.isEmpty() },"use the existing floor first")
+            else {
+                assertTrue(prefix.last().position.y>1.0,"distance=$distance $prefix")
+                assertEquals(listOf(PlacementStyle.BRIDGE,PlacementStyle.TOWER),prefix.flatMap { it.actions }.map { it.placement })
+            }
+        }
+    }
+
+    @Test fun `higher opponent mid bridge waits for confirmation then replaces flat continuation with stairs`() {
+        val ctx=Context(); val nav=CombatNavigator(ctx); val target=NavVec(48.5,1.5,0.5)
+        fun update(tick: Int,height: Double?)=nav.update(tick,target,4.5,false,true,
+            interactionBlocks=setOf(BlockPos(48,1,0)),profile=NavigationProfile.BEDFIGHT,preferredBridgeHeight=height)
+        update(0,null); assertEquals(PlacementStyle.BRIDGE,ctx.requests.single().placement)
+        val cancelled=ctx.cancellations
+        for(tick in 1..8) update(tick,6.0)
+        assertEquals(cancelled,ctx.cancellations); assertEquals(1,ctx.requests.size)
+        ctx.confirmAndLand()
+        var tick=9
+        while(tick<40 && ctx.player.position.y<6.0) {
+            update(tick++,6.0)
+            if(ctx.status==ActionStatus.WAITING) ctx.confirmAndLand() else ctx.walk(nav)
+        }
+        assertEquals(6.0,ctx.player.position.y,0.01,nav.diagnostic)
+        assertTrue(ctx.requests.any { it.placement==PlacementStyle.TOWER })
+        assertTrue(ctx.player.position.x<20.0,"must climb while opponent is still distant")
+        repeat(4) {
+            update(tick++,6.0)
+            if(ctx.status==ActionStatus.WAITING) ctx.confirmAndLand() else ctx.walk(nav)
+        }
+        assertTrue(ctx.requests.all { it.pos.y<=5 },"do not build above the opponent")
+    }
+
+    @Test fun `near bed ignores distant height preference and elevated return can still bridge`() {
+        val ctx=Context(World(5).apply { groundEverywhere=true })
+        val near=IncrementalPathfinder(ctx.world,ctx.player,
+            NavigationGoal(NavVec(5.5,1.5,0.5),4.5,setOf(BlockPos(5,1,0)),8.0),ctx.blocks,
+            nanoTime={0},profile=NavigationProfile.BEDFIGHT).compute(maxNodes=1)
+        assertTrue(near.executableSegment.all { it.actions.isEmpty() })
+        val high=Context()
+        high.terrain.placed[BlockPos(0,5,0)]=high.terrain.solid(BlockPos(0,5,0))
+        high.player=high.player.copy(position=NavVec(0.5,6.0,0.5))
+        val noLowerLand=object : NavigationWorld by high.world {
+            override fun block(pos: BlockPos)=if(pos.y==0) NavBlock(0,replaceable=true) else high.world.block(pos)
+        }
+        val back=firstSegment(IncrementalPathfinder(noLowerLand,high.player,
+            NavigationGoal(NavVec(48.5,1.5,0.5),4.5,setOf(BlockPos(48,1,0))),high.blocks,
+            nanoTime={0},profile=NavigationProfile.BEDFIGHT))
+        assertEquals(PlacementStyle.BRIDGE,back.executableSegment.first().actions.single().placement)
+        assertEquals(5,back.executableSegment.first().actions.single().pos.y)
+    }
+
+    @Test fun `lost height reference finishes the pending block then resumes a flat bed route`() {
+        val ctx=Context(); val nav=CombatNavigator(ctx)
+        fun update(tick: Int,height: Double?)=nav.update(tick,NavVec(48.5,1.5,0.5),4.5,false,true,
+            interactionBlocks=setOf(BlockPos(48,1,0)),profile=NavigationProfile.BEDFIGHT,preferredBridgeHeight=height)
+        update(0,6.0)
+        assertEquals(PlacementStyle.BRIDGE,ctx.requests.single().placement)
+        val cancelled=ctx.cancellations
+        for(tick in 1..8)update(tick,null)
+        assertEquals(cancelled,ctx.cancellations); assertEquals(1,ctx.requests.size)
+        ctx.confirmAndLand(); update(9,null)
+        assertEquals(2,ctx.requests.size)
+        assertEquals(PlacementStyle.BRIDGE,ctx.requests.last().placement)
+        assertEquals(0,ctx.requests.last().pos.y)
+    }
+
+    @Test fun `preferred height obeys ceiling height permissions loaded frontier and available material`() {
+        for(mode in 0..4) {
+            val ctx=Context(World().apply {
+                if(mode==0)ceiling=3
+                if(mode==1)heightLimit=0
+                if(mode==2)enabled=false
+                if(mode==3)loadedThrough=0
+            })
+            if(mode==4)ctx.blocks=null
+            val result=firstSegment(IncrementalPathfinder(ctx.world,ctx.player,
+                NavigationGoal(NavVec(48.5,1.5,0.5),4.5,setOf(BlockPos(48,1,0)),8.0),ctx.blocks,
+                nanoTime={0},profile=NavigationProfile.BEDFIGHT))
+            val actions=result.executableSegment.flatMap { it.actions }
+            if(mode<=1) assertTrue(actions.all { it.placement==PlacementStyle.BRIDGE })
+            else assertTrue(actions.isEmpty(),"mode=$mode")
+        }
+    }
+
+    @Test fun `confirmed bridge travel keeps aim ownership and moves backward without sprint`() {
+        val ctx=Context(World().apply { groundEverywhere=true }).apply {
+            bridgeTravel=true; player=player.copy(yaw=90f)
+        }
+        val nav=CombatNavigator(ctx)
+        step(nav,0,NavVec(48.5,1.0,0.5))
+        assertTrue(nav.ownsAim); assertNull(nav.steeringYaw)
+        assertTrue(Key.Type.KEY_S in ctx.keys); assertFalse(Key.Type.KEY_LCONTROL in ctx.keys)
+        nav.pause(); assertFalse(nav.ownsAim); assertTrue(ctx.keys.isEmpty())
+    }
+
+    @Test fun `bounded terrain check then one construction node exposes distant building prefixes`() {
         for(distance in listOf(16,32,48)) for(profile in NavigationProfile.entries) for(bed in listOf(false,true)) {
             val ctx=Context(World(distance))
             val target=NavVec(distance+0.5,1.0,0.5)
-            val result=IncrementalPathfinder(ctx.world,ctx.player,
+            val result=firstSegment(IncrementalPathfinder(ctx.world,ctx.player,
                 NavigationGoal(target,if(bed)4.5 else 0.3,if(bed)setOf(BlockPos(distance,1,0))else emptySet()),
-                ctx.blocks,nanoTime={0},profile=profile).compute(maxNodes=1)
+                ctx.blocks,nanoTime={0},profile=profile))
             assertEquals(SearchStatus.SEARCHING,result.status)
             assertTrue(result.executableSegment.size in 1..3)
             assertEquals(BlockPos(1,0,0),result.executableSegment.first().actions.single().pos)
@@ -124,11 +248,11 @@ class ConstructionNavigationTest {
         for(ground in listOf(false,true)) {
             val ctx=Context(World(8).apply { groundEverywhere=ground })
             val search=IncrementalPathfinder(ctx.world,ctx.player,NavigationGoal(NavVec(8.5,6.0,0.5),0.3),ctx.blocks,nanoTime={0},profile=NavigationProfile.BEDFIGHT)
-            val prefix=search.compute(maxNodes=1).executableSegment
+            val prefix=firstSegment(search).executableSegment
             assertTrue(prefix.isNotEmpty())
             assertTrue(prefix.last().position.x>0.5)
             if(ground) {
-                assertEquals(PlacementStyle.STEP,prefix.first().actions.single().placement)
+                assertTrue(prefix.all { it.actions.isEmpty() },"walk existing ground before constructing")
             } else {
                 assertEquals(listOf(PlacementStyle.BRIDGE,PlacementStyle.TOWER),prefix.flatMap { it.actions }.map { it.placement })
                 assertEquals(prefix[0].position.x,prefix[1].position.x)
@@ -170,8 +294,8 @@ class ConstructionNavigationTest {
 
     @Test fun `BedFight builds over legal gaps while ordinary jumps and fallback jumps remain`() {
         val ctx=Context(World(3))
-        fun first(profile: NavigationProfile)=IncrementalPathfinder(ctx.world,ctx.player,NavigationGoal(NavVec(6.5,1.0,0.5),0.3),ctx.blocks,
-            nanoTime={0},profile=profile).compute(maxNodes=1).executableSegment.first()
+        fun first(profile: NavigationProfile)=firstSegment(IncrementalPathfinder(ctx.world,ctx.player,NavigationGoal(NavVec(6.5,1.0,0.5),0.3),ctx.blocks,
+            nanoTime={0},profile=profile)).executableSegment.first()
         assertEquals(Traversal.JUMP,first(NavigationProfile.DEFAULT).traversal)
         assertEquals(PlacementStyle.BRIDGE,first(NavigationProfile.BEDFIGHT).actions.single().placement)
         ctx.blocks=null
