@@ -14,6 +14,7 @@ import gg.mineral.bot.api.inv.Inventory
 import gg.mineral.bot.api.math.BoundingBox
 import gg.mineral.bot.api.navigation.*
 import gg.mineral.bot.api.world.ClientWorld
+import gg.mineral.bot.api.world.block.Block
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import java.lang.reflect.InvocationHandler
@@ -34,11 +35,16 @@ class BedFightGoalIntegrationTest {
         var weaponReads=0
         var stateVisible=true
         var utility=false
+        var island: Int?=null
+        var feet=NavVec(2.5,1.0,0.5)
+        var building: BuildingMaterial?=null
+        val placed=mutableMapOf<BlockPos,NavBlock>()
         override val world: NavigationWorld get()=this
         override val revision=0L
         override fun block(pos: BlockPos): NavBlock {
+            placed[pos]?.let { return it }
             val box=when {
-                pos.y==0 -> NavBox(pos.x.toDouble(),0.0,pos.z.toDouble(),pos.x+1.0,1.0,pos.z+1.0)
+                pos.y==0 && (island==null || pos.x<=2 || pos.x>=island!!) -> NavBox(pos.x.toDouble(),0.0,pos.z.toDouble(),pos.x+1.0,1.0,pos.z+1.0)
                 pos in bedState.beds.single().blocks -> NavBox(pos.x.toDouble(),1.0,pos.z.toDouble(),pos.x+1.0,1.5625,pos.z+1.0)
                 else -> null
             }
@@ -46,9 +52,9 @@ class BedFightGoalIntegrationTest {
                 NavBlock(if(pos.y==0)1 else 26,boxes=listOf(box),breakTicks=4.0,toolSlot=1)
         }
         override fun canBreak(pos: BlockPos,block: NavBlock)=pos in bedState.beds.single().blocks
-        override fun canPlace(pos: BlockPos)=false
-        override fun state()=NavigationState(NavVec(2.5,1.0,0.5),0f,true,false,300)
-        override fun material(): BuildingMaterial?=null
+        override fun canPlace(pos: BlockPos)=building!=null
+        override fun state()=NavigationState(feet,-90f,true,false,300)
+        override fun material()=building
         override fun requestAction(action: BlockAction): ActionStatus { requests.add(action); status=ActionStatus.WAITING; return status }
         override fun actionStatus()=status
         override fun tickAction() {}
@@ -56,7 +62,21 @@ class BedFightGoalIntegrationTest {
         override fun cancelAction() { status=ActionStatus.IDLE; keys=emptySet(); cancellations++ }
         override fun reset()=cancelAction()
         private val inventory=proxy<Inventory> { name,_ -> if(name=="getItemStackAt") weaponReads++; null }
-        private val clientWorld=proxy<ClientWorld> { name,_ -> if(name=="getEntities") entities else null }
+        private val clientWorld=proxy<ClientWorld> { name,args -> when(name) {
+            "getEntities" -> entities
+            "getBlockAt" -> {
+                val b=block(BlockPos.at((args!![0] as Number).toDouble(),(args[1] as Number).toDouble(),(args[2] as Number).toDouble()))
+                proxy<Block> { method,_ -> when(method) {
+                    "getId" -> b.id
+                    "getCollisionBoundingBox" -> b.boxes.firstOrNull()?.let { box -> proxy<BoundingBox> { property,_ -> when(property) {
+                        "getMinX" -> box.minX; "getMinY" -> box.minY; "getMinZ" -> box.minZ
+                        "getMaxX" -> box.maxX; "getMaxY" -> box.maxY; "getMaxZ" -> box.maxZ; else -> null
+                    } } }
+                    else -> null
+                } }
+            }
+            else -> null
+        } }
         val self=player<FakePlayer>(UUID(0,0),2.5)
         private val mouse=proxy<Mouse> { _,_ -> null }
         private val keyboard=proxy<Keyboard> { _,_ -> null }
@@ -74,16 +94,18 @@ class BedFightGoalIntegrationTest {
             else -> null
         } }
         inline fun <reified T : ClientPlayer> player(uuid: UUID,x: Double): T {
+            val position={ if(uuid==UUID(0,0))feet else NavVec(x,1.0,0.5) }
             val bounds=proxy<BoundingBox> { name,_ -> when(name) {
-                "getMinX" -> x-0.3; "getMaxX" -> x+0.3; "getMinY" -> 1.0; "getMaxY" -> 2.8
+                "getMinX" -> position().x-0.3; "getMaxX" -> position().x+0.3; "getMinY" -> position().y; "getMaxY" -> position().y+1.8
                 "getMinZ" -> 0.2; "getMaxZ" -> 0.8; else -> null
             } }
             return proxy { name,_ -> when(name) {
                 "getUuid" -> uuid; "getUsername" -> "Player$uuid"
-                "getX","getLastX" -> x; "getY","getLastY" -> 1.0; "getZ","getLastZ" -> 0.5
+                "getX","getLastX" -> position().x; "getY","getLastY" -> position().y; "getZ","getLastZ" -> position().z
                 "getBoundingBox" -> bounds; "getEyeHeight" -> 1.62f
                 "getInventory" -> inventory; "getWorld" -> clientWorld
                 "getActivePotionEffectIds" -> intArrayOf(); "getHealth","getHunger" -> 20f
+                "getRandom" -> java.util.Random(1)
                 "isOnGround" -> true; else -> null
             } }
         }
@@ -128,6 +150,45 @@ class BedFightGoalIntegrationTest {
         val goals=PracticeAI.getGoalsForKit(Fixture().client,"BED_FIGHT")
         assertEquals(1,goals.count { it is MeleeCombatGoal })
         assertTrue(goals.last() is BedFightGoal)
+    }
+    @Test fun `real bed goal starts distant island construction within ten ticks and utility releases it`() {
+        for(distance in listOf(16,32,48)) {
+            val f=Fixture().apply {
+                island=distance+2; building=BuildingMaterial(35,0,2,64)
+                bedState=bedState.copy(beds=listOf(EnemyBed(1,true,setOf(BlockPos(distance+2,1,0),BlockPos(distance+2,1,1)))))
+            }
+            val goal=BedFightGoal(f.client)
+            while(f.requests.isEmpty() && f.tick<10) { goal.onGameLoop(); f.tick++ }
+            assertEquals(PlacementStyle.BRIDGE,f.requests.single().placement)
+            assertEquals(BlockPos(3,0,0),f.requests.single().pos)
+            assertEquals(0,f.weaponReads)
+            f.utility=true; goal.onGameLoop()
+            assertEquals(ActionStatus.IDLE,f.status); assertTrue(f.keys.isEmpty())
+            f.utility=false; f.tick++; goal.onGameLoop()
+            assertEquals(2,f.requests.size)
+        }
+    }
+    @Test fun `combat approach and hunt retain BedFight construction and respawn resumes bed routing`() {
+        for(hunt in listOf(false,true)) {
+            val f=Fixture().apply { island=6; building=BuildingMaterial(35,0,2,64) }
+            val uuid=UUID(0,1)
+            f.entities.add(f.player<ClientPlayer>(uuid,6.5))
+            f.bedState=f.bedState.copy(beds=listOf(EnemyBed(1,!hunt,setOf(BlockPos(18,1,0),BlockPos(18,1,1)))),
+                opponents=listOf(BedFightOpponent(uuid,BedFightLife.ALIVE)))
+            val goal=BedFightGoal(f.client)
+            while(f.requests.isEmpty() && f.tick<12) { goal.onGameLoop(); f.tick++ }
+            assertTrue(goal.debugSummary().contains(if(hunt)"HUNT" else "COMBAT"))
+            assertEquals(PlacementStyle.BRIDGE,f.requests.single().placement)
+            assertEquals(BlockPos(3,0,0),f.requests.single().pos)
+            if(!hunt) {
+                goal.onEntityHurt(EntityHurtEvent(f.self))
+                f.bedState=f.bedState.copy(opponents=listOf(BedFightOpponent(uuid,BedFightLife.RESPAWNING,60)))
+                f.tick++; goal.onGameLoop()
+                assertTrue(goal.debugSummary().contains("BED"))
+                assertEquals(2,f.requests.size)
+                assertEquals(PlacementStyle.BRIDGE,f.requests.last().placement)
+            }
+        }
     }
     companion object {
         private inline fun <reified T> proxy(crossinline values: (String,Array<out Any?>?) -> Any?): T =

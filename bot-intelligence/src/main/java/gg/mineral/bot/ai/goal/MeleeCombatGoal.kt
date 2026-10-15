@@ -41,6 +41,7 @@ open class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clien
     override fun shouldExecute() = true
 
     protected open val preferMatchTarget: Boolean get() = true
+    protected open val navigationProfile get() = gg.mineral.bot.ai.navigation.NavigationProfile.DEFAULT
     protected val combatProtected: Boolean get() = navigationProtection.active
     protected open fun updateObjective(): Boolean = false
     protected open fun chooseCombatTarget(snapshot: CombatPerception.Snapshot,range: Double): CombatPerception.PlayerState? =
@@ -714,7 +715,7 @@ open class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clien
                 !clientInstance.hasActiveSporadicGoal &&
                     (!clientInstance.blocksContinuousInventory || navigator.ownsInteraction) && !clientInstance.blocksContinuousAim,
                 gg.mineral.bot.api.navigation.NavigationCombatState(navigationProtection.active,
-                    target?.uuid ?: clientInstance.matchTargetUuid, preserveOpenMovement = true))
+                    target?.uuid ?: clientInstance.matchTargetUuid, preserveOpenMovement = true),profile=navigationProfile)
             if (logger.isDebugEnabled && clientInstance.currentTick-lastNavigationLogTick >= 200) {
                 lastNavigationLogTick = clientInstance.currentTick
                 logger.debug("Navigation: state={} firstMoveTicks={} firstRouteTicks={} searches={} searchMs={} action={} failures={} lastFailure={}",

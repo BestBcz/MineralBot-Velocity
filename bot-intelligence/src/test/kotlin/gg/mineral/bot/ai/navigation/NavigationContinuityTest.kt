@@ -123,7 +123,8 @@ class NavigationContinuityTest {
         var tick = 0
         while(!navigator.ownsInteraction && tick<100) navigator.update(++tick,NavVec(7.5,1.0,0.5),0.3,false,true)
         assertTrue(navigator.ownsInteraction)
-        assertFalse(navigator.update(++tick,NavVec(1.5,1.0,0.5),3.35,true,true))
+        // The opponent must be reachable, rather than inside the enclosure wall.
+        assertFalse(navigator.update(++tick,NavVec(0.7,1.0,0.5),3.35,true,true))
         assertFalse(navigator.ownsInteraction)
         assertEquals(ActionStatus.IDLE,ctx.status)
     }
@@ -158,7 +159,7 @@ class NavigationContinuityTest {
         }
     }
 
-    @Test fun `three confirmed bridge blocks continue the original route`() {
+    @Test fun `three confirmed bridge blocks continue bounded construction segments`() {
         val ctx = Context(); ctx.world.building = true
         ctx.material = BuildingMaterial(35,0,2,8)
         for(x in 1..3) for(z in -40..40) ctx.world.gaps.add(x to z)
@@ -178,10 +179,10 @@ class NavigationContinuityTest {
             }
         }
         assertEquals(3,ctx.requests.size,navigator.diagnostic)
-        assertEquals(searchesAtFirstOperation,navigator.searchesStarted)
+        assertTrue(navigator.searchesStarted in searchesAtFirstOperation..3)
     }
 
-    @Test fun `three tower levels preserve the route and high target bypasses near protection`() {
+    @Test fun `three tower levels continue segments and high target bypasses near protection`() {
         val ctx = Context(); ctx.world.building = true
         ctx.material = BuildingMaterial(35,0,2,8)
         val navigator = CombatNavigator(ctx)
@@ -199,7 +200,7 @@ class NavigationContinuityTest {
             }
         }
         assertEquals(3,ctx.requests.size,navigator.diagnostic)
-        assertEquals(searchesAtFirstOperation,navigator.searchesStarted)
+        assertTrue(navigator.searchesStarted in searchesAtFirstOperation..3)
     }
 
     @Test fun `two authorized break actions advance without a new search`() {

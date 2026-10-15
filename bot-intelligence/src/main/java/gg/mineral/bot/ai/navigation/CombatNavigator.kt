@@ -23,6 +23,11 @@ class CombatNavigator(private val context: NavigationContext) {
     private var allowEdits = true
     private var localDestination: NavVec? = null
     private val excluded = mutableMapOf<BlockPos, Int>()
+    private val failedJumps = mutableMapOf<JumpEdge, Int>()
+    private var jump: JumpTraversal? = null
+    private var profile = NavigationProfile.DEFAULT
+    private var progressDestination: NavVec? = null
+    private var bestRemaining = Double.POSITIVE_INFINITY
     private val budgetOwner = Any()
     var ownsMovement = false; private set
     var steeringYaw: Float? = null; private set
@@ -52,14 +57,16 @@ class CombatNavigator(private val context: NavigationContext) {
         navigationStartedTick = -1
         blockedTicks = 0; lastBlockedTick = -1; interactionTargets = emptySet()
         confirmedBridge=null
+        jump=null; progressDestination=null; bestRemaining=Double.POSITIVE_INFINITY
     }
-    fun reset() { pause(); targetId = null; excluded.clear() }
+    fun reset() { pause(); targetId = null; excluded.clear(); failedJumps.clear() }
 
     private fun combat(state: NavigationState, resetDelay: Boolean = true): Boolean {
         if (ownsMovement || action != null) context.cancelAction()
         context.searchBudget.cancel(budgetOwner)
         search = null; route.clear(); action = null; preview = false; localDestination = null
         confirmedBridge=null
+        jump=null; progressDestination=null
         ownsMovement = false; failures = 0; retryTick = 0; navigationStartedTick = -1
         context.maintainBuoyancy(state.inWater)
         diagnostic = "combat"
@@ -69,7 +76,8 @@ class CombatNavigator(private val context: NavigationContext) {
 
     fun update(tick: Int, target: NavVec?, range: Double, lineOfSight: Boolean, canUseItems: Boolean,
                combatState: NavigationCombatState = NavigationCombatState(),
-               interactionBlocks: Set<BlockPos> = emptySet()): Boolean {
+               interactionBlocks: Set<BlockPos> = emptySet(),
+               profile: NavigationProfile = NavigationProfile.DEFAULT): Boolean {
         if (tick == lastTick) return ownsMovement
         lastTick = tick
         steeringYaw = null; preparingJump = false
@@ -77,13 +85,14 @@ class CombatNavigator(private val context: NavigationContext) {
         val here = state.position
         val geometry = NavigationGeometry(context.world, state.width, state.height)
         if (!state.inWater) context.maintainBuoyancy(false)
-        if (combatState.targetId != targetId || interactionTargets != interactionBlocks) {
+        if (combatState.targetId != targetId || interactionTargets != interactionBlocks || this.profile!=profile) {
             context.searchBudget.cancel(budgetOwner)
             if (ownsMovement || action != null) context.cancelAction()
             search = null; route.clear(); action = null; preview = false; localDestination = null
             goal = null; plannedGoal = null; failures = 0; retryTick = 0
             targetId = combatState.targetId
             interactionTargets = interactionBlocks.toSet(); blockedTicks = 0; lastBlockedTick = -1
+            this.profile=profile; jump=null; progressDestination=null
         }
         lastPosition?.let { previous ->
             if (hypot(here.x-previous.x, here.z-previous.z)>3.0 || abs(here.y-previous.y)>3.0) {
@@ -91,8 +100,11 @@ class CombatNavigator(private val context: NavigationContext) {
                 context.cancelAction(); action = null; search = null; route.clear(); preview = false
                 failures = 0; retryTick = 0; localDestination = null
                 lastPosition = here; progressTick = tick
+                jump=null; progressDestination=null
             }
         }
+        if(lastPosition==null) progressTick=tick
+        lastPosition=here
         if (state.inWater && state.air<80 && geometry.clear(NavVec(here.x,here.y+0.4,here.z),emptyMap())) {
             context.searchBudget.cancel(budgetOwner)
             if (action != null) context.cancelAction()
@@ -104,6 +116,7 @@ class CombatNavigator(private val context: NavigationContext) {
         if (target == null) {
             if (ownsMovement || action != null) context.cancelAction()
             action = null; search = null; route.clear(); goal = null; plannedGoal = null
+            jump=null; progressDestination=null
             context.searchBudget.cancel(budgetOwner)
             ownsMovement = state.inWater
             if (state.inWater) context.move(setOf(Key.Type.KEY_SPACE))
@@ -114,7 +127,10 @@ class CombatNavigator(private val context: NavigationContext) {
         val distance = sqrt((here.x-target.x).pow(2)+(here.y-target.y).pow(2)+(here.z-target.z).pow(2))
         val entityPursuit = interactionBlocks.isEmpty()
         if (entityPursuit && lineOfSight && distance<=max(NavigationTuning.COMBAT_MIN_RANGE,range) &&
-            abs(here.y-target.y)<=NavigationTuning.COMBAT_HEIGHT) return combat(state)
+            abs(here.y-target.y)<=NavigationTuning.COMBAT_HEIGHT &&
+            geometry.clearSegment(here,target,emptyMap()) &&
+            (geometry.walk(here,target,emptyMap()) ||
+                abs(here.y-target.y)<=0.6 && geometry.walk(here,NavVec(target.x,here.y,target.z),emptyMap()))) return combat(state)
         if (!state.inWater && !state.onGround && action == null && !ownsMovement &&
             entityPursuit && (combatState.protected || combatState.preserveOpenMovement)) return combat(state)
         // Open combat pursuit checks a short supported corridor, including targets currently airborne.
@@ -133,17 +149,29 @@ class CombatNavigator(private val context: NavigationContext) {
         }
 
         if (navigationStartedTick<0) { navigationStartedTick = tick; firstMovementDelayTicks = -1; firstRouteDelayTicks = -1 }
-        if (lastPosition == null) { lastPosition = here; progressTick = tick }
         excluded.entries.removeIf { tick>=it.value }
+        failedJumps.entries.removeIf { tick>=it.value }
         goal = NavigationGoal(target,if(entityPursuit) range.coerceIn(0.3,3.0) else BlockInteraction.REACH,interactionBlocks)
+        val changedGoal = plannedGoal?.let {
+            hypot(it.position.x-target.x,it.position.z-target.z)>2.0 || abs(it.position.y-target.y)>2.0 ||
+                it.interactionBlocks!=interactionBlocks
+        } ?: false
+        if(changedGoal && tick-lastPlanTick>=4) {
+            context.searchBudget.cancel(budgetOwner)
+            if(action!=null) context.cancelAction()
+            action=null; route.clear(); search=null; jump=null; localDestination=null; progressDestination=null
+        }
         if (allowEdits != canUseItems) {
             context.searchBudget.cancel(budgetOwner)
             if (action != null) { context.cancelAction(); action = null }
             search = null
             if (!canUseItems && route.any { it.actions.isNotEmpty() }) route.clear()
+            jump=null
             allowEdits = canUseItems; retryTick = 0
         }
         if (lastRevision != context.world.revision) {
+            // Frontier nodes carry virtual edits and cannot survive arbitrary support changes.
+            search=null; context.searchBudget.cancel(budgetOwner)
             localDestination = null; retryTick = 0; lastRevision = context.world.revision
         }
         if (action != null) {
@@ -182,17 +210,14 @@ class CombatNavigator(private val context: NavigationContext) {
         if (openPursuit) {
             context.searchBudget.cancel(budgetOwner)
             route.clear(); search = null
+            jump=null
             drive(tick,state,target,false,false); diagnostic = "direct"
             checkProgress(tick,state)
             return true
         }
         consumeReached(tick,state)
-        val changedGoal = plannedGoal?.let {
-            hypot(it.position.x-target.x,it.position.z-target.z)>2.0 || abs(it.position.y-target.y)>2.0 ||
-                it.interactionBlocks!=interactionBlocks
-        } ?: true
-        if (changedGoal && tick-lastPlanTick>=4) search = null
-        if (tick>=retryTick && (search != null || route.isEmpty() || changedGoal && tick-lastPlanTick>=4)) {
+        // Finish the committed segment before replacing it or rebasing the next search.
+        if (tick>=retryTick && route.isEmpty()) {
             advanceSearch(tick,state,geometry,canUseItems)
             consumeReached(tick,state)
         }
@@ -210,7 +235,11 @@ class CombatNavigator(private val context: NavigationContext) {
             val nextAction = step.actions.first()
             val live = context.world.block(nextAction.pos)
             val permitted = if (nextAction.kind == BlockActionKind.PLACE)
-                context.world.canPlace(nextAction.pos) && live?.replaceable == true
+                context.world.canPlace(nextAction.pos) && live?.replaceable == true &&
+                    (context.material()?.let { it.count>0 && it.id==nextAction.blockId && it.metadata==nextAction.metadata }==true) &&
+                    listOf(nextAction.pos.offset(1,0,0),nextAction.pos.offset(-1,0,0),nextAction.pos.offset(0,0,1),
+                        nextAction.pos.offset(0,0,-1),nextAction.pos.offset(0,-1,0)).any { context.world.block(it)?.boxes?.isNotEmpty()==true } &&
+                    placementClear(state,step,nextAction,geometry)
             else live != null && live.id == nextAction.blockId && context.world.canBreak(nextAction.pos,live)
             if (!canUseItems || !permitted) {
                 context.searchBudget.cancel(budgetOwner)
@@ -231,29 +260,48 @@ class CombatNavigator(private val context: NavigationContext) {
             localMove(tick,state,target,geometry)
             return true
         }
-        drive(tick,state,lookAhead(state,geometry),step.traversal==Traversal.JUMP,step.traversal==Traversal.SWIM)
+        if(step.traversal==Traversal.JUMP) {
+            driveJump(tick,state,step.position)
+            return true
+        }
+        jump=null
+        drive(tick,state,lookAhead(state,geometry),false,step.traversal==Traversal.SWIM)
         diagnostic = step.traversal.name
         checkProgress(tick,state)
         return true
     }
 
+    private fun placementClear(state: NavigationState,step: RouteStep,action: BlockAction,geometry: NavigationGeometry): Boolean {
+        val p=action.pos
+        val placed=mapOf(p to NavBlock(action.blockId,action.metadata,listOf(
+            NavBox(p.x.toDouble(),p.y.toDouble(),p.z.toDouble(),p.x+1.0,p.y+1.0,p.z+1.0))))
+        if(!geometry.clear(step.position,placed)) return false
+        return when {
+            action.placement==PlacementStyle.TOWER -> geometry.clear(step.position.copy(y=step.position.y+0.25),emptyMap())
+            step.traversal==Traversal.JUMP -> geometry.jump(state.position,step.position,placed)
+            else -> geometry.walk(state.position,step.position,placed)
+        }
+    }
+
     private fun consumeReached(tick: Int,state: NavigationState) {
         while (route.isNotEmpty()) {
             val next = route.first()
-            if (next.actions.isNotEmpty() || next.traversal==Traversal.TOWER && !state.onGround) break
+            if (next.actions.isNotEmpty() || next.traversal in setOf(Traversal.TOWER,Traversal.JUMP) && !state.onGround) break
             val threshold=if(confirmedBridge?.let { next.position==NavVec(it.x+0.5,it.y+1.0,it.z+0.5) }==true) 0.6 else 0.4
             if (hypot(state.position.x-next.position.x,state.position.z-next.position.z)>threshold ||
                 abs(state.position.y-next.position.y)>0.3 &&
                 !(next.traversal==Traversal.SWIM && state.position.y>=next.position.y-0.3)) break
             route.removeFirst(); confirmedBridge=null; progressTick = tick; lastPosition = state.position; failures = 0
+            jump=null; progressDestination=null
         }
+        if(route.isEmpty() && preview) { search=null; context.searchBudget.cancel(budgetOwner); preview=false }
     }
 
     private fun advanceSearch(tick: Int,state: NavigationState,geometry: NavigationGeometry,canUseItems: Boolean) {
         if (search == null) {
             search = IncrementalPathfinder(context.world,state,goal!!,
                 if (canUseItems) context.material() else null,excluded.keys.toSet(),allowEdits=canUseItems,
-                actionOverheadTicks=context.actionOverheadTicks)
+                actionOverheadTicks=context.actionOverheadTicks,profile=profile,failedJumps=failedJumps.keys.toSet())
             plannedGoal = goal; lastPlanTick = tick; searchesStarted++
         }
         val budget = context.searchBudget.acquire(budgetOwner)
@@ -264,7 +312,7 @@ class CombatNavigator(private val context: NavigationContext) {
             searchNanos += elapsed; context.searchBudget.finish(budgetOwner,elapsed)
         }
         diagnostic = result.status.toString()+" ("+result.expanded+")"
-        val remaining = splice(state,result.path,geometry)
+        val remaining = splice(state,if(result.status==SearchStatus.SEARCHING) result.executableSegment else result.path,geometry)
         if (result.status != SearchStatus.SEARCHING) {
             search = null; context.searchBudget.cancel(budgetOwner)
             val mustReplace = route.isEmpty() || preview || route.last().position.let {
@@ -276,11 +324,7 @@ class CombatNavigator(private val context: NavigationContext) {
                 if (firstRouteDelayTicks<0) firstRouteDelayTicks = tick-navigationStartedTick
             } else if (route.isEmpty()) retry(tick)
         } else if (route.isEmpty() && remaining != null) {
-            val closeElevatedTarget = canUseItems && goal!!.position.y>state.position.y+12.0 &&
-                hypot(goal!!.position.x-state.position.x,goal!!.position.z-state.position.z)<=1.5
-            // A useful, collision-checked tower prefix can start before a very high target's full batch is solved.
-            val safePrefix = remaining.takeWhile { step -> step.actions.isEmpty() || closeElevatedTarget &&
-                step.traversal==Traversal.TOWER && step.actions.all { it.placement==PlacementStyle.TOWER } }.take(3)
+            val safePrefix = remaining.take(NavigationTuning.EXECUTABLE_PREFIX_STEPS)
             val useful = !state.inWater || hypot(goal!!.position.x-state.position.x,goal!!.position.z-state.position.z)<1.0 ||
                 safePrefix.any { hypot(it.position.x-state.position.x,it.position.z-state.position.z)>0.1 }
             if (safePrefix.isNotEmpty() && useful) {
@@ -343,19 +387,44 @@ class CombatNavigator(private val context: NavigationContext) {
             drive(tick,state,cached,false,state.inWater); return
         }
         val heading = atan2(target.z-here.z,target.x-here.x)
+        // Search chooses detours; local waiting only advances toward the objective.
+        val ahead=NavVec(here.x+cos(heading)*0.8,here.y,here.z+sin(heading)*0.8)
         localDestination = if (!state.onGround && !state.inWater ||
             hypot(here.x-target.x,here.z-target.z)<1.2 && target.y>here.y+1.25) null else
-            listOf(0.0,PI/4,-PI/4,PI/2,-PI/2,PI).map { angle ->
-                NavVec(here.x+cos(heading+angle)*0.8,here.y,here.z+sin(heading+angle)*0.8)
-            }.firstOrNull { dest -> if(state.inWater) geometry.swim(here,dest,emptyMap()) else geometry.walk(here,dest,emptyMap()) }
+            ahead.takeIf { if(state.inWater) geometry.swim(here,it,emptyMap()) else geometry.walk(here,it,emptyMap()) }
         localDestination?.let { drive(tick,state,it,false,state.inWater) } ?: run {
-            context.move(if(state.inWater) setOf(Key.Type.KEY_SPACE) else emptySet()); ownsMovement = true
+            steeringYaw=Math.toDegrees(atan2(-(target.x-here.x),target.z-here.z)).toFloat()
+            context.move(if(state.inWater) setOf(Key.Type.KEY_SPACE) else setOf(Key.Type.KEY_LSHIFT)); ownsMovement = true
         }
     }
 
     private fun retry(tick: Int) {
         failures++
         retryTick = tick+when(failures) { 1 -> 5; 2 -> 10; else -> 20 }
+    }
+
+    private fun driveJump(tick: Int,state: NavigationState,dest: NavVec) {
+        val attempt=jump?.takeIf { it.to==dest } ?: JumpTraversal(state.position,dest,tick).also { jump=it }
+        val yaw=Math.toDegrees(atan2(-(dest.x-state.position.x),dest.z-state.position.z)).toFloat()
+        val error=Math.toRadians((yaw-state.yaw).toDouble())
+        val phase=attempt.update(tick,state,abs(atan2(sin(error),cos(error)))<=Math.toRadians(20.0))
+        preparingJump=true; steeringYaw=yaw; ownsMovement=true
+        when(phase) {
+            JumpTraversal.Phase.FAILED -> {
+                failedJumps[JumpEdge(attempt.from.block,dest.block)]=tick+NavigationTuning.FAILED_JUMP_TICKS
+                context.searchBudget.cancel(budgetOwner)
+                route.clear(); search=null; jump=null; localDestination=null; progressDestination=null
+                preparingJump=false
+                context.move(setOf(Key.Type.KEY_LSHIFT)); diagnostic="jump failed"; progressTick=tick
+            }
+            JumpTraversal.Phase.PREPARING -> { context.move(emptySet()); diagnostic="jump preparing" }
+            JumpTraversal.Phase.LANDED -> { consumeReached(tick,state); context.move(emptySet()) }
+            else -> {
+                drive(tick,state,dest,false,false)
+                if(phase==JumpTraversal.Phase.TAKEOFF) context.move(setOf(Key.Type.KEY_W,Key.Type.KEY_LCONTROL,Key.Type.KEY_SPACE))
+                preparingJump=true; diagnostic="jump "+phase.name
+            }
+        }
     }
 
     private fun drive(tick: Int,state: NavigationState,dest: NavVec,jump: Boolean,swim: Boolean) {
@@ -390,15 +459,21 @@ class CombatNavigator(private val context: NavigationContext) {
     private fun checkProgress(tick: Int,state: NavigationState) {
         if (tick<retryTick) { progressTick = tick; return }
         if (search!=null && route.isEmpty()) { progressTick = tick; return }
-        if (preparingJump || !state.onGround && !state.inWater) { progressTick = tick; return }
+        if (jump!=null) return // Bounded independently, including preparation and airborne time.
         val here = state.position
-        if (lastPosition?.let {
-                hypot(here.x-it.x,here.z-it.z)>(if(state.inWater) 0.12 else 0.2) || abs(here.y-it.y)>0.3
-            } != false) { lastPosition = here; progressTick = tick; return }
+        val destination=route.firstOrNull()?.position ?: localDestination ?: goal?.position ?: return
+        val remaining=hypot(here.x-destination.x,here.z-destination.z)+abs(here.y-destination.y)
+        if(progressDestination!=destination) {
+            progressDestination=destination; bestRemaining=remaining; progressTick=tick
+        } else if(remaining<bestRemaining-(if(state.inWater) 0.12 else 0.2)) {
+            bestRemaining=remaining; progressTick=tick
+        }
+        lastPosition=here
         if (tick-progressTick<(if(state.inWater) 20 else 12)) return
         route.firstOrNull()?.let { excluded[it.position.block] = tick+60 }
         context.searchBudget.cancel(budgetOwner)
         route.clear(); search = null; localDestination = null
+        progressDestination=null
         retry(tick); progressTick = tick
     }
 }

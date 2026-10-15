@@ -16,6 +16,7 @@ class BedFightGoal(clientInstance: ClientInstance) : MeleeCombatGoal(clientInsta
     private var lastLogTick=-200
     override fun debugSummary()="mode=$mode target=$selectedTarget navigation=${navigator?.diagnostic}"
     override val preferMatchTarget get()=false
+    override val navigationProfile get()=gg.mineral.bot.ai.navigation.NavigationProfile.BEDFIGHT
 
     override fun chooseCombatTarget(snapshot: CombatPerception.Snapshot,range: Double): CombatPerception.PlayerState? {
         if(mode==BedFightPolicy.Mode.FALLBACK) return super.chooseCombatTarget(snapshot,range)
@@ -54,7 +55,7 @@ class BedFightGoal(clientInstance: ClientInstance) : MeleeCombatGoal(clientInsta
         val closest=bed.blocks.minBy { p -> (p.x+0.5-here.x).pow(2)+(p.y+0.5-here.y).pow(2)+(p.z+0.5-here.z).pow(2) }
         navigator.update(clientInstance.currentTick,NavVec(closest.x+0.5,closest.y+0.5,closest.z+0.5),4.5,false,
             (!clientInstance.blocksContinuousInventory || navigator.ownsInteraction) && !clientInstance.blocksContinuousAim,
-            interactionBlocks=bed.blocks)
+            interactionBlocks=bed.blocks,profile=navigationProfile)
         if(!navigator.ownsInteraction) navigator.steeringYaw?.let { setMouseYaw(it); setMousePitch(12f) }
         return true
     }
