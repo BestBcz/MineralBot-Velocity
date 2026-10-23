@@ -26,7 +26,6 @@ open class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clien
         kotlin.math.abs(((1000 / (clientInstance.configuration.averageCps + 1)).toLong() - meanDelay).toDouble())
             .toLong()
     private var lastBounceTime: Long = 0
-    private var lastTargetSwitchTick = 0
     private var lastSprintResetTick = 0
     private var currentHorizontalAimAcceleration = 1.0f
     private var currentVerticalAimAcceleration = 1.0f
@@ -40,7 +39,6 @@ open class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clien
     private var smoothedTargetVelZ = 0.0
     override fun shouldExecute() = true
 
-    protected open val preferMatchTarget: Boolean get() = true
     protected open val navigationProfile get() = gg.mineral.bot.ai.navigation.NavigationProfile.DEFAULT
     protected val combatProtected: Boolean get() = navigationProtection.active
     protected open fun updateObjective(): Boolean = false
@@ -48,10 +46,11 @@ open class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clien
         snapshot.bestTargetState(target,range)
     protected fun setCombatTarget(state: CombatPerception.PlayerState?) {
         if (state!=null) noteTargetState(state)
-        if (target!==state?.entity) { lastTargetSwitchTick=clientInstance.currentTick; target=state?.entity }
+        target=state?.entity
     }
     protected fun clearCombatMemory() {
         target=null; lastSeenTargetTick=-200; navigationProtection.clear()
+        clientInstance.combatTargetState?.reset()
         recentHitsOnTarget=0; recentHitsTaken=0; forwardSuppressedUntilTick=-1
         releaseStrafe()
     }
@@ -60,28 +59,8 @@ open class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clien
         val targetSearchRange = clientInstance.configuration.targetSearchRange
         val snapshot = perception.snapshot()
 
-        if (preferMatchTarget && clientInstance.currentTick - lastTargetSwitchTick < 20) {
-            val currentTarget = target
-            val currentTargetState = snapshot.stateFor(currentTarget)
-            val matchTargetUuid = clientInstance.matchTargetUuid
-            if (currentTargetState != null && currentTargetState.distance3D <= targetSearchRange &&
-                (matchTargetUuid == null || currentTargetState.uuid == matchTargetUuid)
-            ) {
-                noteTargetState(currentTargetState)
-                return
-            }
-        }
-
-        val targetState = chooseCombatTarget(snapshot, targetSearchRange.toDouble())
-        if (targetState != null) {
-            noteTargetState(targetState)
-        }
-
-        val nextTarget = targetState?.entity
-        if (nextTarget !== this.target) {
-            lastTargetSwitchTick = clientInstance.currentTick
-            this.target = nextTarget
-        }
+        if (target?.uuid in clientInstance.configuration.friendlyUUIDs) clearCombatMemory()
+        setCombatTarget(chooseCombatTarget(snapshot, targetSearchRange.toDouble()))
     }
 
     private fun noteTargetState(target: ClientPlayer) {
@@ -399,6 +378,7 @@ open class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clien
                         .toLong()
 
         val attacked = target ?: return
+        if (attacked.uuid in clientInstance.configuration.friendlyUUIDs || perception.snapshot().stateFor(attacked) == null) return
         if (fakePlayer.distance3DTo(attacked)<=clientInstance.configuration.reach+0.35)
             navigationProtection.attacking(attacked.uuid)
         pressButton(25, MouseButton.Type.LEFT_CLICK)

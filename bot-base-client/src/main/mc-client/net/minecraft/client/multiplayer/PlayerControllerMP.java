@@ -433,6 +433,11 @@ public class PlayerControllerMP {
      * Attacks an entity
      */
     public void attackEntity(EntityPlayer p_78764_1_, Entity p_78764_2_) {
+        if (this.mc instanceof gg.mineral.bot.base.client.instance.ClientInstance instance
+                && (p_78764_1_.getUuid().equals(p_78764_2_.getUuid())
+                    || instance.getConfiguration().getFriendlyUUIDs().contains(p_78764_2_.getUuid()))) {
+            return;
+        }
         this.syncCurrentPlayItem();
         this.netClientHandler.addToSendQueue(new C02PacketUseEntity(p_78764_2_, C02PacketUseEntity.Action.ATTACK));
         p_78764_1_.attackTargetEntityWithCurrentItem(p_78764_2_);

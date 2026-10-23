@@ -6,6 +6,7 @@ import gg.mineral.bot.api.entity.living.player.FakePlayer
 import gg.mineral.bot.api.entity.throwable.ClientPotion
 import gg.mineral.bot.api.entity.throwable.ClientThrowableEntity
 import gg.mineral.bot.api.instance.ClientInstance
+import gg.mineral.bot.api.instance.CombatTargetState
 import gg.mineral.bot.api.inv.item.Item
 import gg.mineral.bot.api.math.BoundingBox
 import gg.mineral.bot.api.util.MathUtil
@@ -16,17 +17,22 @@ import java.util.UUID
 class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
     private var cachedTick = Int.MIN_VALUE
     private var cachedSnapshot: Snapshot? = null
+    private var cachedFriendlies: Set<UUID>? = null
+    private val fallbackTargetState = CombatTargetState()
 
     fun snapshot(): Snapshot {
         val tick = clientInstance.currentTick
         val snapshot = cachedSnapshot
-        if (snapshot != null && cachedTick == tick) {
+        val friendlies = clientInstance.configuration.friendlyUUIDs
+        if (snapshot != null && cachedTick == tick && cachedFriendlies === friendlies &&
+            snapshot.matchTargetUuid == clientInstance.matchTargetUuid) {
             return snapshot
         }
 
         val nextSnapshot = buildSnapshot(tick)
         cachedTick = tick
         cachedSnapshot = nextSnapshot
+        cachedFriendlies = friendlies
         return nextSnapshot
     }
 
@@ -34,12 +40,18 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         return snapshot().bestTargetState(currentTarget, maxRange)
     }
 
+    /** Resolve a cast's locked target without changing the shared combat selection. */
+    fun enemyState(uuid: UUID?): PlayerState? = snapshot().enemies.firstOrNull {
+        it.uuid == uuid && it.distance3D <= clientInstance.configuration.targetSearchRange
+    }
+
     fun nearestEnemy(maxRange: Double = Double.MAX_VALUE): PlayerState? {
         return snapshot().nearestEnemy?.takeIf { it.distance3D <= maxRange }
     }
 
     fun nearestVisibleEnemy(maxRange: Double = clientInstance.configuration.targetSearchRange.toDouble()): PlayerState? {
-        return snapshot().enemies.firstOrNull { it.distance3D <= maxRange && it.lineOfSightLikelyClear }
+        return snapshot().enemies.filter { it.distance3D <= maxRange && it.lineOfSightLikelyClear }
+            .minByOrNull { it.distance3D }
     }
 
     fun canSeeEnemy(maxRange: Double = clientInstance.configuration.targetSearchRange.toDouble()): Boolean {
@@ -320,6 +332,7 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         val world = fakePlayer.world
         val self = buildPlayerState(fakePlayer, fakePlayer, tick, true)
         val enemies = mutableListOf<PlayerState>()
+        val friendlies = clientInstance.configuration.friendlyUUIDs
         val projectiles = mutableListOf<ProjectileState>()
         val bedFight = clientInstance.bedFightState
         val aliveBedFightPlayers = bedFight?.opponents?.filter { it.life==gg.mineral.bot.api.navigation.BedFightLife.ALIVE }?.map { it.uuid }?.toSet()
@@ -327,7 +340,7 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         for (entity in world.entities) {
             if (entity is ClientPlayer &&
                 entity.uuid != fakePlayer.uuid &&
-                !clientInstance.configuration.friendlyUUIDs.contains(entity.uuid) &&
+                !friendlies.contains(entity.uuid) && entity.health > 0f &&
                 (aliveBedFightPlayers==null || entity.uuid in aliveBedFightPlayers)
             ) {
                 enemies.add(buildPlayerState(entity, fakePlayer, tick, false))
@@ -339,9 +352,9 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
 
         val matchTargetUuid = clientInstance.matchTargetUuid
         val sortedEnemies = enemies.sortedWith(
-            compareBy<PlayerState> { if (it.uuid == matchTargetUuid) 0 else 1 }
-                .thenBy { it.targetScore }
+            compareBy<PlayerState> { it.targetScore - if (it.uuid == matchTargetUuid) MATCH_TARGET_BONUS else 0.0 }
                 .thenBy { it.distance3D }
+                .thenBy { it.uuid }
         )
         val sortedProjectiles = projectiles.sortedBy { it.threatScore }
 
@@ -350,7 +363,9 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
             self = self,
             enemies = sortedEnemies,
             projectiles = sortedProjectiles,
-            matchTargetUuid = matchTargetUuid
+            matchTargetUuid = matchTargetUuid,
+            targetState = clientInstance.combatTargetState ?: fallbackTargetState,
+            searchRange = clientInstance.configuration.targetSearchRange.toDouble()
         )
     }
 
@@ -563,7 +578,9 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         val self: PlayerState,
         val enemies: List<PlayerState>,
         val projectiles: List<ProjectileState>,
-        val matchTargetUuid: UUID?
+        val matchTargetUuid: UUID?,
+        val targetState: CombatTargetState = CombatTargetState(),
+        val searchRange: Double? = null
     ) {
         val nearestEnemy: PlayerState?
             get() = enemies.minByOrNull { it.distance3D }
@@ -578,17 +595,35 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
         }
 
         fun bestTargetState(currentTarget: ClientPlayer?, range: Double): PlayerState? {
-            val assigned = matchTargetUuid?.let { uuid -> enemies.firstOrNull { it.uuid == uuid } }
-            if (assigned != null && assigned.distance3D <= range) {
-                return assigned
+            // Select over the bot's full search range. A utility's smaller cast
+            // range must not replace the target shared with the melee goal.
+            val candidates = enemies.filter { it.distance3D <= (searchRange ?: range) && it.health > 0f && it.uuid != self.uuid }
+            val currentUuid = targetState.targetUuid ?: currentTarget?.uuid
+            val current = candidates.firstOrNull { it.uuid == currentUuid }
+            if (current != null && targetState.lastEvaluationTick == tick) {
+                return current.takeIf { it.distance3D <= range }
             }
-
-            val current = stateFor(currentTarget)
-            if (current != null && current.distance3D <= range) {
-                return current
+            fun score(player: PlayerState) = player.targetScore -
+                if (player.uuid == matchTargetUuid) MATCH_TARGET_BONUS else 0.0
+            val ordering = compareBy<PlayerState> { score(it) }.thenBy { it.distance3D }.thenBy { it.uuid }
+            val best = candidates.minWithOrNull(ordering)
+            val emergency = if (current != null && (current.distance3D > 5.0 || !current.lineOfSightLikelyClear)) {
+                candidates.filter { it.lineOfSightLikelyClear && it.distance3D <= 3.5 && it.pressuringSelf }
+                    .minWithOrNull(ordering)
+            } else null
+            val next = when {
+                current == null -> best
+                emergency != null -> emergency
+                tick.toLong() - targetState.lastSwitchTick.toLong() < TARGET_SWITCH_COOLDOWN -> current
+                best != null && score(best) + TARGET_SWITCH_MARGIN <= score(current) -> best
+                else -> current
             }
-
-            return enemies.firstOrNull { it.distance3D <= range }
+            if (targetState.targetUuid != next?.uuid) {
+                targetState.targetUuid = next?.uuid
+                targetState.lastSwitchTick = tick
+            }
+            targetState.lastEvaluationTick = tick
+            return next?.takeIf { it.distance3D <= range }
         }
     }
 
@@ -714,6 +749,9 @@ class CombatPerception(private val clientInstance: ClientInstance) : MathUtil {
     ) : BoundingBox
 
     companion object {
+        private const val MATCH_TARGET_BONUS = 0.35
+        private const val TARGET_SWITCH_COOLDOWN = 10
+        private const val TARGET_SWITCH_MARGIN = 1.0
         private const val EPSILON = 1.0E-4
         private const val MAX_STEP_HEIGHT = 0.6
         private const val MAX_JUMP_HEIGHT = 1.25

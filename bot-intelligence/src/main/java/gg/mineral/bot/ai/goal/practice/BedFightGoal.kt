@@ -20,7 +20,6 @@ class BedFightGoal(clientInstance: ClientInstance) : MeleeCombatGoal(clientInsta
     private var selectedTarget: java.util.UUID?=null
     private var lastLogTick=-200
     override fun debugSummary()="mode=$mode target=$selectedTarget navigation=${navigator?.diagnostic}"
-    override val preferMatchTarget get()=false
     override val navigationProfile get()=gg.mineral.bot.ai.navigation.NavigationProfile.BEDFIGHT
 
     override fun chooseCombatTarget(snapshot: CombatPerception.Snapshot,range: Double): CombatPerception.PlayerState? {

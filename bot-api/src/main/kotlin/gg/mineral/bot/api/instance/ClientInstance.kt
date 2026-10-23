@@ -55,6 +55,10 @@ interface ClientInstance : EventHandler {
     val matchTargetUuid: UUID?
         get() = null
 
+    /** Shared selection and hysteresis for combat and offensive utility goals. */
+    val combatTargetState: CombatTargetState?
+        get() = null
+
     val bedFightState: gg.mineral.bot.api.navigation.BedFightState?
         get() = navigationContext?.bedFightState
 

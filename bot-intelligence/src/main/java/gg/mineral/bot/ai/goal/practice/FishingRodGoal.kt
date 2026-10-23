@@ -27,6 +27,7 @@ class FishingRodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     private var returnTick = -1
     private var aimTick = -1
     private var targetId = -1
+    private var targetUuid: java.util.UUID? = null
     private var castYaw = 0f
     private var castPitch = 0f
     private var flightTicks = 0.0
@@ -54,7 +55,9 @@ class FishingRodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         returnTick = -1
         aimTick = -1
         returning = false
-        targetId = perception.bestTarget()?.entity?.entityId ?: -1
+        val target = perception.bestTarget()
+        targetId = target?.entity?.entityId ?: -1
+        targetUuid = target?.uuid
     }
 
     private fun restoreMelee(): Boolean {
@@ -70,7 +73,7 @@ class FishingRodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         val player = clientInstance.fakePlayer
         val inventory = player.inventory
         val config = clientInstance.configuration
-        val enemy = perception.snapshot().enemies.firstOrNull { it.entity.entityId == targetId }
+        val enemy = perception.enemyState(targetUuid)?.takeIf { it.entity.entityId == targetId }
         val motion = enemy?.let(::sampleMotion)
         if (returning) {
             if (restoreMelee()) finish()
@@ -141,6 +144,7 @@ class FishingRodGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     override fun blocksContinuousAim() = castTick < 0 || clientInstance.currentTick <= castTick + 1
     override fun blocksContinuousAttack() = true
     override fun onEnd() {
+        targetUuid = null
         clientInstance.mouse.clearPendingClicks()
         clientInstance.fakePlayer.stopUsingItem()
         // An aborted setup is not a cast; allow a short retry instead of a full rod cooldown.

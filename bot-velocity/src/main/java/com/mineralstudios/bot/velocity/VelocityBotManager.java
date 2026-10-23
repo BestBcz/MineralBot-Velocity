@@ -15,7 +15,6 @@ import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
@@ -379,7 +378,13 @@ public class VelocityBotManager {
      * This is rerun whenever another bot finishes its UUID mapping because the
      * first BotDuelStarted packet can arrive before later teammates are mapped.
      */
-    private void refreshAllFriendlyUuidMappings() {
+    private synchronized void refreshAllFriendlyUuidMappings() {
+        Map<UUID, FriendlyUuidMappings.Identity> identities = new java.util.HashMap<>();
+        activeBots.forEach((uuid, instance) -> identities.put(uuid,
+                new FriendlyUuidMappings.Identity(instance.getConfiguration().getUuid(),
+                        instance.getConfiguration().getFullUsername())));
+        Map<UUID, UUID> backendMappings = new java.util.HashMap<>(serverUuidToOurUuid);
+        Map<UUID, Set<UUID>> aliasIndex = FriendlyUuidMappings.index(backendMappings, identities);
         for (Map.Entry<UUID, Set<UUID>> entry : botDeclaredFriendlyUuids.entrySet()) {
             UUID ourBotUuid = entry.getKey();
             ClientInstance bot = activeBots.get(ourBotUuid);
@@ -387,33 +392,11 @@ public class VelocityBotManager {
                 continue;
             }
 
-            Set<UUID> resolvedFriendlies = new HashSet<>();
-            for (UUID declaredUuid : entry.getValue()) {
-                resolvedFriendlies.add(declaredUuid);
-
-                UUID friendlyInternalUuid = resolveToOurUuid(declaredUuid);
-                resolvedFriendlies.add(friendlyInternalUuid);
-
-                ClientInstance friendlyBot = activeBots.get(friendlyInternalUuid);
-                if (friendlyBot == null) {
-                    continue;
-                }
-
-                BotConfiguration friendlyConfiguration = friendlyBot.getConfiguration();
-                resolvedFriendlies.add(friendlyConfiguration.getUuid());
-
-                String friendlyUsername = friendlyConfiguration.getFullUsername();
-                if (friendlyUsername != null && !friendlyUsername.isEmpty()) {
-                    resolvedFriendlies.add(UUID.nameUUIDFromBytes(
-                            ("OfflinePlayer:" + friendlyUsername).getBytes(StandardCharsets.UTF_8)));
-                }
+            Set<UUID> resolvedFriendlies = FriendlyUuidMappings.expand(entry.getValue(),
+                    bot.getConfiguration().getFriendlyUUIDs(), ourBotUuid, aliasIndex);
+            if (!resolvedFriendlies.equals(bot.getConfiguration().getFriendlyUUIDs())) {
+                bot.getConfiguration().setFriendlyUUIDs(resolvedFriendlies);
             }
-
-            resolvedFriendlies.remove(ourBotUuid);
-            resolvedFriendlies.remove(bot.getConfiguration().getUuid());
-
-            bot.getConfiguration().getFriendlyUUIDs().clear();
-            bot.getConfiguration().getFriendlyUUIDs().addAll(resolvedFriendlies);
             logger.debug("Refreshed friendly UUID aliases for bot {}: {}", ourBotUuid, resolvedFriendlies);
         }
     }
@@ -715,7 +698,7 @@ public class VelocityBotManager {
                 if (allowCreate) handleBotDuelRequest(in, source);
                 break;
             case SUB_CHANNEL_BOT_DUEL_STARTED:
-                handleBotDuelStarted(in);
+                handleBotDuelStarted(payload);
                 break;
             case SUB_CHANNEL_BOT_REQUEST_ACCEPTED:
                 handleBotRequestAccepted(in);
@@ -853,30 +836,17 @@ public class VelocityBotManager {
         return null;
     }
 
-    private void handleBotDuelStarted(ByteArrayDataInput in) {
+    private void handleBotDuelStarted(byte[] payload) {
         try {
-            String playerUUIDStr = in.readUTF();
-            String botUUIDStr = in.readUTF();
-            String kitType = in.readUTF();
-            BotDifficulty difficulty = BotDifficulty.fromId(in.readUTF());
-            String requestToken = in.readUTF();
-
-            int identityVersion;
-            try { identityVersion = in.readInt(); } catch (IllegalStateException e) { identityVersion = 0; }
-            UUID playerUUID = UUID.fromString(playerUUIDStr);
-            UUID serverBotUUID = UUID.fromString(botUUIDStr);
-            UUID targetUUID = playerUUID;
-            Set<UUID> friendlyUUIDs = new HashSet<>();
-
-            try {
-                targetUUID = UUID.fromString(in.readUTF());
-                int friendlyCount = Math.max(0, in.readInt());
-                for (int index = 0; index < friendlyCount; index++) {
-                    friendlyUUIDs.add(UUID.fromString(in.readUTF()));
-                }
-            } catch (IllegalStateException ignored) {
-                // Backwards compatibility with practice builds that only sent a 1v1 target.
-            }
+            // Decode the entire packet before changing mappings, goals or team state.
+            BotDuelStartedMessage message = BotDuelStartedMessage.decode(payload);
+            UUID playerUUID = message.ownerUuid();
+            UUID serverBotUUID = message.botUuid();
+            String kitType = message.kitType();
+            BotDifficulty difficulty = message.difficulty();
+            String requestToken = message.requestToken();
+            UUID targetUUID = message.targetUuid();
+            Set<UUID> friendlyUUIDs = message.friendlyUuids();
 
             logger.debug("BotDuel started: Owner={}, Target={}, Bot(server)={}, Kit={}, Difficulty={}, Token={}, Friendlies={}",
                     playerUUID, targetUUID, serverBotUUID, kitType, difficulty.getId(), requestToken, friendlyUUIDs);
@@ -920,18 +890,22 @@ public class VelocityBotManager {
             }
 
             botTargets.put(ourBotUUID, targetUUID);
-            bot.setMatchTargetUuid(targetUUID);
             kitTypes.put(ourBotUUID, kitType);
             botDifficulties.put(ourBotUUID, difficulty);
             botRequestTokens.put(ourBotUUID, requestToken);
-            bot.getNavigationContext().bind(requestToken);
-            botDeclaredFriendlyUuids.put(ourBotUUID, new HashSet<>(friendlyUUIDs));
+            botDeclaredFriendlyUuids.put(ourBotUUID, friendlyUUIDs);
             refreshAllFriendlyUuidMappings();
 
-            logger.debug("Configuring combat AI for bot {} with kit type {} at difficulty {}", ourBotUUID, kitType,
-                    difficulty.getId());
-            PracticeAI.INSTANCE.configureBotForKit(bot, kitType, difficulty);
-            logger.info("Bot duel started: bot={}, kit={}, difficulty={}", ourBotUUID, kitType, difficulty.getId());
+            UUID configuredUuid = ourBotUUID;
+            ClientInstance configuredBot = bot;
+            configuredBot.scheduleTask(() -> {
+                if (activeBots.get(configuredUuid) != configuredBot || isRequestCancelled(requestToken)) return;
+                configuredBot.setMatchTargetUuid(targetUUID);
+                configuredBot.getCombatTargetState().reset();
+                configuredBot.getNavigationContext().bind(requestToken);
+                PracticeAI.INSTANCE.configureBotForKit(configuredBot, kitType, difficulty);
+                logger.info("Bot duel started: bot={}, kit={}, difficulty={}", configuredUuid, kitType, difficulty.getId());
+            }, 0);
         } catch (Exception e) {
             logger.error("Failed to parse BotDuelStarted message", e);
         }

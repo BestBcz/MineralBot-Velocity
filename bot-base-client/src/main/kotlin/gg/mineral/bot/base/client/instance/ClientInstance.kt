@@ -92,6 +92,8 @@ open class ClientInstance(
     @Volatile
     override var matchTargetUuid: UUID? = null
 
+    override val combatTargetState = gg.mineral.bot.api.instance.CombatTargetState()
+
     override var currentTick: Int = 0
     private var foregroundGoalName: String? = null
     private var foregroundGoalStartTick = -1
@@ -508,6 +510,7 @@ open class ClientInstance(
     }
 
     override fun shutdownMinecraftApplet() {
+        combatTargetState.reset()
         navigationContext.reset()
         if (InstanceManager.instances.remove(configuration.uuid) != null)
                 logger.debug("Removed instance: {}", configuration.uuid)

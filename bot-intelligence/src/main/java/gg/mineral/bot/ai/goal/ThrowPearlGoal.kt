@@ -54,6 +54,10 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     private var lastPearledTick = 0
     private var speedMissingSinceTick = -1
     private val perception = CombatPerception(clientInstance)
+    private var castTargetUuid: java.util.UUID? = null
+
+    private fun selectedTarget(): CombatPerception.PlayerState? =
+        if (executing) perception.enemyState(castTargetUuid) else perception.bestTarget()
 
 
     private enum class Type : MathUtil {
@@ -105,11 +109,12 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
 
         if (!inventory.contains(Item.ENDER_PEARL)) return false
 
-        val targetState = perception.nearestVisibleEnemy() ?: return false
+        val targetState = selectedTarget() ?: return false
         return choosePearlType(fakePlayer, targetState) != null
     }
 
     override fun onStart() {
+        castTargetUuid = perception.bestTarget()?.uuid
     }
 
     private fun canSeeEnemy(): Boolean {
@@ -185,7 +190,7 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
 
         tick.finishIf("Valid pearl slot not found", pearlSlot == -1)
 
-        val targetState = perception.bestTarget()
+        val targetState = selectedTarget()
 
         tick.finishIf("Enemy is not present", targetState == null)
         targetState ?: return
@@ -329,7 +334,7 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         tick.executeAsync(1, {
             trajectory.compute(100) == Trajectory.Result.VALID
         }) {
-            if (!it) return@executeAsync
+            if (!it || selectedTarget() == null) return@executeAsync
             lastPearledTick = clientInstance.currentTick
             pressButton(10, MouseButton.Type.RIGHT_CLICK)
             tick.finishIf("Thrown Pearl", it)
@@ -337,6 +342,8 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     }
 
     override fun onEnd() {
+        castTargetUuid = null
+        asyncTasks.clear()
     }
 
     private fun getAnglesToFeet(player: ClientPlayer, targetState: CombatPerception.PlayerState): FloatArray {

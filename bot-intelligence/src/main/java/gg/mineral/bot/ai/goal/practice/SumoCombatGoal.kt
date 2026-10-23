@@ -24,7 +24,6 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
 
     private val perception = CombatPerception(clientInstance)
     private var target: ClientPlayer? = null
-    private var lastTargetSwitchTick = 0
     private var lastSprintResetTick = 0
     private var strafeDirection: Byte = 0
     private var strafeLockedUntilTick = -1
@@ -79,22 +78,7 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         val targetSearchRange = clientInstance.configuration.targetSearchRange
         val snapshot = perception.snapshot()
 
-        if (clientInstance.currentTick - lastTargetSwitchTick < 20) {
-            val currentTargetState = snapshot.stateFor(target)
-            val matchTargetUuid = clientInstance.matchTargetUuid
-            if (currentTargetState != null && currentTargetState.distance3D <= targetSearchRange &&
-                (matchTargetUuid == null || currentTargetState.uuid == matchTargetUuid)
-            ) {
-                return
-            }
-        }
-
-        val nextTarget = snapshot.bestTargetState(target, targetSearchRange.toDouble())?.entity
-
-        if (nextTarget !== this.target) {
-            lastTargetSwitchTick = clientInstance.currentTick
-            this.target = nextTarget
-        }
+        target = snapshot.bestTargetState(target, targetSearchRange.toDouble())?.entity
     }
 
     private fun aimAtTarget() {
@@ -216,6 +200,8 @@ class SumoCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
     }
 
     private fun attackTarget() {
+        val attacked = target ?: return
+        if (attacked.uuid in clientInstance.configuration.friendlyUUIDs || perception.snapshot().stateFor(attacked) == null) return
         val fakePlayer = clientInstance.fakePlayer
         nextClick = (timeMillis() + fakePlayer.random.nextGaussian(meanDelay.toDouble(), deviation.toDouble())).toLong()
         pressButton(25, MouseButton.Type.LEFT_CLICK)

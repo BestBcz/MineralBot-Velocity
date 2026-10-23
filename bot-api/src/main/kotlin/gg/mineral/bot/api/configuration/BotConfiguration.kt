@@ -43,7 +43,7 @@ data class BotConfiguration(
     var skin: Skins = Skins.MINERAL_DEFAULT,
     var debug: Boolean = false,
     var disableEntityCollisions: Boolean = true,
-    var friendlyUUIDs: MutableSet<UUID> = BotAPI.INSTANCE.collections().newSet(),
+    @Volatile var friendlyUUIDs: MutableSet<UUID> = BotAPI.INSTANCE.collections().newSet(),
     var potAccuracy: Double = 0.5,
     var velocityInputRecoveryEnabled: Boolean = false,
     var healthPotAimWaitTicks: Int = 12,

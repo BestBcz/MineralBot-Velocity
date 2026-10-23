@@ -38,6 +38,9 @@ dependencies {
     implementation("it.unimi.dsi:fastutil:8.5.12")
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
+    testImplementation("com.velocitypowered:velocity-api:3.5.0-SNAPSHOT")
+    testRuntimeOnly("io.netty:netty-all:4.2.9.Final")
+    testRuntimeOnly("org.apache.logging.log4j:log4j-core:2.25.3")
 }
 
 tasks {

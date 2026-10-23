@@ -34,6 +34,7 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     private var lastPotTick = 0
     private var effects: Set<Int> = emptySet()
     private val perception = CombatPerception(clientInstance)
+    private var castTargetUuid: java.util.UUID? = null
     override val suspend: Boolean
         get() = clientInstance.currentScreen !is ContainerScreen && !shouldExecute()
 
@@ -67,16 +68,17 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     }
 
     override fun onStart() {
+        castTargetUuid = perception.bestTarget()?.uuid
         pressKey(Key.Type.KEY_S)
         unpressKey(Key.Type.KEY_W, Key.Type.KEY_A, Key.Type.KEY_D)
     }
 
     private fun angleTowardsEnemies(): Float {
-        return perception.yawTowardsNearestEnemy()
+        return closestEnemyState()?.let(perception::yawTowards) ?: clientInstance.fakePlayer.yaw
     }
 
     private fun closestEnemyState(): CombatPerception.PlayerState? {
-        return perception.bestTarget()
+        return if (executing) perception.enemyState(castTargetUuid) else perception.bestTarget()
     }
 
     private fun closestEnemy(): ClientPlayer? {
@@ -109,6 +111,10 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     }
 
     override fun onTick(tick: Tick) {
+        if (closestEnemyState() == null) {
+            tick.finishIf("Debuff target is no longer an opponent", true)
+            return
+        }
         val debuffSlot = getDebuffSlot()
         val fakePlayer = clientInstance.fakePlayer
         val inventory = fakePlayer.inventory
@@ -181,7 +187,7 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         tick.executeAsync(1, {
             trajectory.compute(100) == Trajectory.Result.VALID
         }) {
-            if (!it) return@executeAsync
+            if (!it || closestEnemyState() == null) return@executeAsync
             lastPotTick = clientInstance.currentTick
             pressButton(10, MouseButton.Type.RIGHT_CLICK)
             tick.finishIf("Thrown Debuff", it)
@@ -189,6 +195,8 @@ class ThrowDebuffPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     }
 
     override fun onEnd() {
+        castTargetUuid = null
+        asyncTasks.clear()
         unpressKey(Key.Type.KEY_S)
         pressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL)
     }
