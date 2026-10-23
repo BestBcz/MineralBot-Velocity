@@ -14,6 +14,7 @@ import gg.mineral.bot.api.instance.ClientInstance
  * - Gapple: Golden apples, sword combat
  * - Sumo: Knockback-focused, platform control
  * - BuildUHC: Blocks, lava, fishing rod, golden heads
+ * - SG: Existing supplies and UHC fishing rod combat
  * - Soup: Soup healing instead of potions
  * - Boxing: Pure melee, no items
  * - Axe: Axe combat (high damage)
@@ -39,6 +40,8 @@ object PracticeAI {
             normalizedKit.contains("sumo") -> getSumoGoals(clientInstance)
             normalizedKit.contains("builduhc") || normalizedKit.contains("uhc") ->
                     getBuildUHCGoals(clientInstance)
+            normalizedKit == "sg" || normalizedKit == "survivalgames" ->
+                    getSurvivalGamesGoals(clientInstance)
             normalizedKit.contains("soup") || normalizedKit.contains("kitmap") ->
                     getSoupGoals(clientInstance)
             normalizedKit.contains("gapple") || normalizedKit.contains("diamond") ->
@@ -188,6 +191,19 @@ object PracticeAI {
         return arrayOf(
                 SelectKitGoal(clientInstance),
                 MeleeCombatGoal(clientInstance) // Basic targeting for now
+        )
+    }
+
+    /** Survival Games keeps its existing supplies and shares UHC's rod combat. */
+    private fun getSurvivalGamesGoals(clientInstance: ClientInstance): Array<Goal> {
+        return arrayOf(
+                SelectKitGoal(clientInstance),
+                ReplaceArmorGoal(clientInstance),
+                ThrowHealthPotGoal(clientInstance),
+                EatGappleGoal(clientInstance),
+                SafeEatGoal(clientInstance),
+                FishingRodGoal(clientInstance),
+                MeleeCombatGoal(clientInstance)
         )
     }
 

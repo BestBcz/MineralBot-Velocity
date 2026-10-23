@@ -20,15 +20,16 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
     private val allowEdits: Boolean = true, private val actionOverheadTicks: Double = 4.0,
     private val terrainCostFactor: Double = NavigationTuning.TERRAIN_COST_FACTOR,
     private val profile: NavigationProfile = NavigationProfile.DEFAULT,
-    private val failedJumps: Set<JumpEdge> = emptySet()) {
+    private val failedJumps: Set<JumpEdge> = emptySet(), private val escapeFire: Boolean = false) {
     private data class Key(val x: Int,val y: Int,val z: Int,val edits: Map<BlockPos,NavBlock>,val remaining: Int)
     private data class Node(val step: RouteStep,val edits: Map<BlockPos,NavBlock>,val remaining: Int,
         val cost: Double,val heuristic: Double,val parent: Node?)
-    private val geometry=NavigationGeometry(world,start.width,start.height)
+    private val geometry=NavigationGeometry(world,start.width,start.height,ignoreFire=escapeFire)
+    private val safeGeometry=if(escapeFire) NavigationGeometry(world,start.width,start.height) else geometry
     private val startState=start
     private val origin=start.position
     private val bedDistance=hypot(origin.x-goal.position.x,origin.z-goal.position.z)
-    private val climbStage=profile==NavigationProfile.BEDFIGHT && goal.preferredBridgeHeight?.let { it>origin.y+0.6 }==true && bedDistance>6.0
+    private val climbStage=!escapeFire && profile==NavigationProfile.BEDFIGHT && goal.preferredBridgeHeight?.let { it>origin.y+0.6 }==true && bedDistance>6.0
     // Solve a bounded advancing climb before resuming the low bed objective.
     // A height-only heuristic toward a distant bed can otherwise prefer a long flat bridge.
     private val guidance=if(climbStage) {
@@ -45,7 +46,7 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
     private val existingOpen=PriorityQueue<Node>(compareBy<Node> { it.cost+it.heuristic })
     private val existingCosts=HashMap<Key,Double>()
     private var existingExpanded=0
-    private var existingChecked=profile!=NavigationProfile.BEDFIGHT || !allowEdits || material==null
+    private var existingChecked=escapeFire || profile!=NavigationProfile.BEDFIGHT || !allowEdits || material==null
     init {
         open.add(best); costs[key(best)]=0.0
         if(!existingChecked) { existingOpen.add(best); existingCosts[key(best)]=0.0 }
@@ -55,6 +56,8 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
         hypot(p.x-goal.position.x,p.z-goal.position.z)>6.0)
         max(goal.position.y,goal.preferredBridgeHeight ?: goal.position.y) else goal.position.y
     private fun h(p: NavVec): Double {
+        // Dijkstra's ordering finds the least-cost safe exit, independently of the enemy.
+        if(escapeFire) return 0.0
         val distance=hypot(p.x-guidance.x,p.z-guidance.z)
         val tolerance=if(climbStage) 0.05 else 1.0
         return max(0.0,distance-if(climbStage) 0.3 else goal.range)*horizontalEstimate+
@@ -141,6 +144,7 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
 
     private fun atGoal(n: Node): Boolean {
         val p=n.step.position
+        if(escapeFire) return safeGeometry.safeFooting(p)
         if (goal.interactionBlocks.isNotEmpty()) return BlockInteraction.findAction(world,
             startState.copy(position=p,onGround=true,inWater=false),goal.interactionBlocks,n.edits,excluded)!=null
         if(hypot(p.x-goal.position.x,p.z-goal.position.z)>goal.range || abs(p.y-goal.position.y)>1.0) return false
@@ -158,12 +162,12 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
         return true
     }
 
-    private fun neighbors(n: Node,construction: Boolean=allowEdits): List<Node> {
+    private fun neighbors(n: Node,construction: Boolean=allowEdits && !escapeFire): List<Node> {
         val result=ArrayList<Node>(); val from=n.step.position
         val inWater=geometry.water(from,n.edits)
         // Grid nodes must also reach non-centered players and short-lived remembered positions.
         val goalDistance=hypot(from.x-goal.position.x,from.z-goal.position.z)
-        if(goalDistance<1.5 && abs(from.y-goal.position.y)<=1.0 && geometry.clear(goal.position,n.edits)) {
+        if(!escapeFire && goalDistance<1.5 && abs(from.y-goal.position.y)<=1.0 && geometry.clear(goal.position,n.edits)) {
             if(inWater && geometry.swim(from,goal.position,n.edits))
                 result.add(child(n,goal.position,Traversal.SWIM,emptyList(),n.edits,0,swimCost(from,goal.position,n.edits)))
             else if(!inWater && geometry.walk(from,goal.position,n.edits))
@@ -203,7 +207,7 @@ class IncrementalPathfinder(private val world: NavigationWorld, start: Navigatio
                 }
                 if(construction && dx*dz==0) breakObstacles(n,dest)?.let { result.add(it) }
             }
-            if(profile==NavigationProfile.BEDFIGHT && goal.position.y<from.y-0.6 && !inWater && dx*dz==0 && !naturalAdvance &&
+            if(!escapeFire && profile==NavigationProfile.BEDFIGHT && goal.position.y<from.y-0.6 && !inWater && dx*dz==0 && !naturalAdvance &&
                 hypot(startState.velocity.x,startState.velocity.z)<=0.35) {
                 val landing=geometry.landingBelow(x,z,from.y,n.edits)
                 if(landing!=null && geometry.drop(from,landing,n.edits)) {

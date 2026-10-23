@@ -4,15 +4,33 @@ import gg.mineral.bot.api.navigation.*
 import kotlin.math.*
 
 /** All positions are feet positions. Collision shapes stay in world coordinates. */
-internal class NavigationGeometry(val world: NavigationWorld, val width: Double, val height: Double) {
+internal class NavigationGeometry(val world: NavigationWorld, val width: Double, val height: Double,
+                                  private val ignoreFire: Boolean = false) {
     private var cachedRevision = world.revision
     private val blocks = HashMap<BlockPos, NavBlock?>()
     fun block(p: BlockPos, edits: Map<BlockPos, NavBlock>): NavBlock? {
-        edits[p]?.let { return it }
+        edits[p]?.let { return traversableBlock(it) }
         if (cachedRevision != world.revision) { blocks.clear(); cachedRevision = world.revision }
         if (!blocks.containsKey(p)) blocks[p] = world.block(p)
-        return blocks[p]
+        return traversableBlock(blocks[p])
     }
+    // Fire has no solid collision shape. Only an active escape may cross it.
+    private fun traversableBlock(block: NavBlock?): NavBlock? =
+        if (ignoreFire && block?.id == 51 && block.hazardous) block.copy(hazardous = false) else block
+
+    fun touchingFire(p: NavVec): Boolean {
+        val box = body(p)
+        for (x in floor(box.minX).toInt()..floor(box.maxX).toInt())
+            for (y in max(0, floor(box.minY).toInt())..floor(box.maxY).toInt())
+                for (z in floor(box.minZ).toInt()..floor(box.maxZ).toInt()) {
+                    if (block(BlockPos(x,y,z), emptyMap())?.id == 51 &&
+                        NavBox(x.toDouble(),y.toDouble(),z.toDouble(),x+1.0,y+1.0,z+1.0).intersects(box)) return true
+                }
+        return false
+    }
+
+    fun safeFooting(p: NavVec): Boolean = clear(p, emptyMap()) &&
+        (water(p, emptyMap()) || supportedFootprint(p))
     fun body(p: NavVec): NavBox {
         val r = width / 2 - 0.001
         return NavBox(p.x-r, p.y+0.001, p.z-r, p.x+r, p.y+height, p.z+r)
