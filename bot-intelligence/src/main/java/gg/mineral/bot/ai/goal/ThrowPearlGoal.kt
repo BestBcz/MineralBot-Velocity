@@ -1,6 +1,10 @@
 package gg.mineral.bot.ai.goal
 
 import gg.mineral.bot.ai.goal.type.InventoryGoal
+import gg.mineral.bot.ai.goal.type.SupplyItems
+import gg.mineral.bot.ai.goal.type.SupplyKind
+import gg.mineral.bot.ai.goal.type.SupplyPolicy
+import gg.mineral.bot.ai.goal.type.SupplyWindow
 import gg.mineral.bot.ai.perception.CombatPerception
 import gg.mineral.bot.api.controls.Key
 import gg.mineral.bot.api.controls.MouseButton
@@ -157,6 +161,11 @@ class ThrowPearlGoal(clientInstance: ClientInstance) : InventoryGoal(clientInsta
         if (shouldEmergencyRetreat(fakePlayer, targetState)) {
             return Type.RETREAT
         }
+
+        // Keep a ready food window instead of closing it with a chase pearl.
+        if (SupplyItems.findNeededSlot(clientInstance, SupplyKind.FOOD) != -1 &&
+            SupplyPolicy.window(perception.snapshot(), clientInstance.configuration.reach.toDouble(),
+                clientInstance.latency) != SupplyWindow.UNSAFE) return null
 
         return Type.entries.firstOrNull {
             it != Type.RETREAT &&

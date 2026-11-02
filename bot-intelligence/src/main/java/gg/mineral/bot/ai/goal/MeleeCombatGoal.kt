@@ -653,7 +653,7 @@ open class MeleeCombatGoal(clientInstance: ClientInstance) : InventoryGoal(clien
         if (target != null && entity.uuid == target.uuid) {
             refreshHitWindow()
             recentHitsOnTarget++
-            if (navigator?.ownsMovement != true) {
+            if (navigator?.ownsMovement != true && !shouldYieldMovementToUtility()) {
                 sprintReset()
                 lastSprintResetTick = clientInstance.currentTick
             }

@@ -1,6 +1,7 @@
 package gg.mineral.bot.ai.goal.practice
 
 import gg.mineral.bot.ai.goal.*
+import gg.mineral.bot.ai.goal.type.SupplyState
 import gg.mineral.bot.api.configuration.BotDifficulty
 import gg.mineral.bot.api.goal.Goal
 import gg.mineral.bot.api.instance.ClientInstance
@@ -30,7 +31,7 @@ object PracticeAI {
     fun getGoalsForKit(clientInstance: ClientInstance, kitType: String): Array<Goal> {
         val normalizedKit = kitType.lowercase().replace(" ", "").replace("_", "")
 
-        return when {
+        val goals: Array<Goal> = when {
             normalizedKit.contains("bedfight") -> arrayOf(
                 SelectKitGoal(clientInstance), ReplaceArmorGoal(clientInstance),
                 EatGappleGoal(clientInstance), SafeEatGoal(clientInstance), BedFightGoal(clientInstance))
@@ -58,6 +59,15 @@ object PracticeAI {
             normalizedKit.contains("diamond") -> getDiamondGoals(clientInstance)
             else -> getDefaultGoals(clientInstance)
         }
+        val supplyState = SupplyState()
+        for (goal in goals) {
+            when (goal) {
+                is SafeEatGoal -> goal.shareSupplyState(supplyState)
+                is DrinkPotionGoal -> goal.shareSupplyState(supplyState)
+                is DrinkStrengthPotionGoal -> goal.shareSupplyState(supplyState)
+            }
+        }
+        return goals
     }
 
     /**
