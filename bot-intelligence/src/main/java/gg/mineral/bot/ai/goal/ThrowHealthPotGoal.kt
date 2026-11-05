@@ -20,13 +20,13 @@ import gg.mineral.bot.api.inv.item.ItemStack
 
 /** Keep moving into the forward splash; interrupt preparation only for close counterattacks. */
 class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientInstance), Sporadic, Timebound, GoalDebugState {
-    override val maxDuration: Long
-        get() = if (currentState == PotState.RECOVERING || currentState == PotState.COUNTERATTACKING ||
-            currentState == PotState.PRESSURING) Long.MAX_VALUE else 160
+    override val maxDuration: Long = 160
     override var startTime: Long = 0
     override var executing = false
 
-    private enum class PotState { PREPARING, AIMING, THROWING, RECOVERING, COUNTERATTACKING, PRESSURING }
+    private enum class PotState {
+        PREPARING, AIMING, THROWING, CONFIRMING, RECOVERING, RESTORING, COUNTERATTACKING, PRESSURING
+    }
     private var currentState = PotState.PREPARING
     private val perception = CombatPerception(clientInstance)
     private var lastPotTick = -40
@@ -75,10 +75,19 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
         val player = clientInstance.fakePlayer
         val inventory = player.inventory
         if (timing.observe(clientInstance.currentTick, player.health)) burst.healed()
-        burst.observeCount(countHealthPots())
+        burst.observeCount(clientInstance.currentTick, countHealthPots())
+        if (currentState == PotState.RESTORING) {
+            if (restoreMelee()) finish()
+            return
+        }
         if (player.health < 6f) {
             urgent = true
             burst.requireTwo()
+        }
+        if (player.health >= 20f || (throwTick < 0 && player.health > 10f) ||
+            burst.complete(clientInstance.currentTick, noPotionsRemaining = getHealthPotSlot() == -1)) {
+            restoreCombat()
+            return
         }
         // Re-evaluate the current target's packet-synchronized health every tick. Once a
         // bottle has been thrown, finish splash recovery and any required burst before attacking.
@@ -112,7 +121,7 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
                 return
             }
         }
-        // Once a bottle is airborne, keep walking into it until healing is confirmed.
+        // Once a bottle is airborne, keep walking into it until the round has settled.
         val enemyDistance = perception.nearestEnemy()?.distance2D ?: Double.POSITIVE_INFINITY
         val hitDuringAttempt = timing.hitVersion > attemptHitVersion
         if (throwTick < 0 && hitDuringAttempt && enemyDistance > 2.5 && !immediateThrow) {
@@ -131,7 +140,6 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
             restoreMelee()
             return
         }
-        if (burst.complete()) currentState = PotState.RECOVERING
         walkForward()
 
         when (currentState) {
@@ -174,25 +182,19 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
                 if (!readyToThrow()) { finish(); return }
                 tryThrow()
             }
-            PotState.RECOVERING -> {
+            PotState.CONFIRMING, PotState.RECOVERING -> {
                 setMouseYaw(plannedYaw)
                 setMousePitch(plannedPitch)
-                val elapsed = clientInstance.currentTick - throwTick
-                if (elapsed <= 1) return
                 unpressButton(MouseButton.Type.RIGHT_CLICK)
-                burst.observeCount(countHealthPots())
                 val hasPotion = getHealthPotSlot() != -1
+                currentState = if (burst.awaitingConsumption) PotState.CONFIRMING else PotState.RECOVERING
                 if (burst.nextReady(clientInstance.currentTick) && hasPotion) {
                     prepareFollowup()
-                } else if (burst.complete(noPotionsRemaining = !hasPotion)) {
-                    if (restoreMelee()) finish()
-                } else if (burst.missed(clientInstance.currentTick)) {
-                    // Failed or ignored clicks are retried, never treated as successful healing.
-                    if (hasPotion) prepareFollowup()
-                    else if (restoreMelee()) finish() // No consumables remain: avoid permanent lock.
+                } else if (burst.retryReady(clientInstance.currentTick) && hasPotion) {
+                    prepareFollowup()
                 }
             }
-            PotState.COUNTERATTACKING, PotState.PRESSURING -> Unit // Handled above; controls belong to melee.
+            PotState.RESTORING, PotState.COUNTERATTACKING, PotState.PRESSURING -> Unit // Handled above.
         }
     }
 
@@ -208,20 +210,19 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
 
     private fun tryThrow() {
         val player = clientInstance.fakePlayer
-        if (!readyToThrow()) return
+        if (player.health >= 20f || !readyToThrow() || !burst.canThrow(clientInstance.currentTick)) return
         if (throwGate.tryIssue(clientInstance.currentTick, player.yaw, player.pitch,
                 immediateThrow || urgent || timing.settled(clientInstance.currentTick))) {
             throwTick = clientInstance.currentTick
-            burst.thrown(throwTick, countHealthPots())
+            burst.thrown(throwTick, countHealthPots(), maxOf(clientInstance.latency, clientInstance.configuration.latency))
             lastPotTick = throwTick
             pressButton(5, MouseButton.Type.RIGHT_CLICK)
-            currentState = PotState.RECOVERING
+            currentState = PotState.CONFIRMING
         }
     }
 
     private fun prepareNext(immediate: Boolean = false) {
         currentState = PotState.PREPARING
-        tickCount = 0
         immediateThrow = immediate
         throwGate = PotionThrowGate(if (immediate) 0 else clientInstance.configuration.healthPotAimWaitTicks)
     }
@@ -229,6 +230,17 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     private fun readyToThrow(): Boolean = clientInstance.currentScreen == null &&
         !clientInstance.hasPendingInventoryTransaction &&
         clientInstance.fakePlayer.inventory.heldItemStack?.let(::isHealthPot) == true
+
+    private fun restoreCombat() {
+        currentState = PotState.RESTORING
+        clientInstance.mouse.clearPendingClicks()
+        clientInstance.fakePlayer.stopUsingItem()
+        stopMovement()
+        if (restoreMelee()) finish()
+    }
+
+    private fun stopMovement() = unpressKey(Key.Type.KEY_W, Key.Type.KEY_LCONTROL,
+        Key.Type.KEY_Q, Key.Type.KEY_SPACE, Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
 
     private fun restoreMelee(): Boolean {
         val inventory = clientInstance.fakePlayer.inventory
@@ -251,11 +263,11 @@ class ThrowHealthPotGoal(clientInstance: ClientInstance) : InventoryGoal(clientI
     override fun blocksContinuousAim() = !yieldsToMelee()
     override fun blocksContinuousAttack() = !yieldsToMelee()
     override fun blocksContinuousMovement() = !yieldsToMelee()
-    override fun debugSummary() = "state=$currentState,urgent=$urgent,bottles=${burst.consumedBottles}/${burst.requiredBottles},throwTick=$throwTick"
+    override fun debugSummary() = "state=$currentState,urgent=$urgent,bottles=${burst.consumedBottles}/${burst.requiredBottles},reserved=${burst.reservedBottles},throwTick=$throwTick"
     override fun onEnd() {
         clientInstance.mouse.clearPendingClicks()
         clientInstance.fakePlayer.stopUsingItem()
-        unpressKey(Key.Type.KEY_Q, Key.Type.KEY_SPACE, Key.Type.KEY_S, Key.Type.KEY_A, Key.Type.KEY_D)
+        stopMovement()
         if (clientInstance.currentScreen != null) pressKey(10, Key.Type.KEY_ESCAPE)
     }
     override fun onEvent(event: Event): Boolean {

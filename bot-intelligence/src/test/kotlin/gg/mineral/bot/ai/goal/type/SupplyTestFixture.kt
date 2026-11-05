@@ -119,6 +119,7 @@ internal class SupplyTestFixture {
         else -> null
     } }
     private val keyboard = proxy<Keyboard> { name, args -> when (name) {
+        "stopAll" -> { movement.clear(); Unit }
         "pressKey", "unpressKey" -> {
             val types = args!!.filterIsInstance<Array<*>>().single().filterIsInstance<Key.Type>()
             for (type in types) {
